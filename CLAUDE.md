@@ -63,7 +63,7 @@ Copy-pasting a config from staging to prod should not be sufficient to hand an a
 Load-bearing. Do not quietly drift into them.
 
 1. **Not a federated query engine.** No cross-source joins, no unified query language. Each source is queried in its **native dialect**; results come back as-is. If a caller wants to correlate Postgres and Mongo data, the caller composes. The moment we accept a join across sources we are rebuilding Trino and we lose two years.
-2. **Not a schema-migration tool.** DML only, never DDL. No `CREATE`, `ALTER`, `DROP`, `TRUNCATE`, no index changes, no collection drops. Not behind a flag, not "for admins". Schema change is a deploy, not an agent action.
+2. **Not a schema-migration tool** — but "go fix that table" is in scope. **Additive and corrective DDL is allowed** on a table already on the write allow-list: `ADD COLUMN`, widening `ALTER COLUMN … TYPE`, `ADD`/`DROP CONSTRAINT`, `SET`/`DROP NOT NULL`, `CREATE`/`DROP INDEX`. Two things are refused structurally and are not behind a flag: **anything that destroys data** (`DROP COLUMN`, `DROP TABLE`, `TRUNCATE`, `ALTER COLUMN … USING`) and **anything that changes what a write allow-list entry resolves to** (`RENAME`, `SET SCHEMA`, T-SQL's `ALTER SCHEMA … TRANSFER`). `CREATE TABLE` stays out: adding a table is a deploy, repairing one is not. See [ADR 0002](docs/decisions/0002-ddl-additive-and-corrective.md). The ceiling moved; it did not disappear.
 3. **Not a BI tool.** No dashboards, no charts, no saved reports.
 4. **Not a credential vault.** We reference secrets from env vars, files, or an external vault. We never store them.
 5. **Not a control plane — and never will be.** No hosted registry, no multi-tenant SaaS, no central account, no cross-box policy or audit aggregation. The server is the whole system. This is a deliberate ceiling: the day someone wants centralised policy across many boxes is the day they have outgrown RTFQ and should buy Teleport. We stay the small-team tool. Do not add a "just a little" central anything.
@@ -72,7 +72,7 @@ Load-bearing. Do not quietly drift into them.
 
 ### 1. Access level is per-source and default-deny
 
-Each source declares `access: read` (default) or `access: write`. Each token declares, per source, what it may do. The effective permission is the **intersection**. A source with `access: write` reached by a read-only token is read-only. A write-granted token pointed at a read-only source gets nothing.
+Each source declares `access: read` (default), `access: write`, or `access: schema`. The levels nest: `schema` implies `write` implies `read`. Each token declares, per source, what it may do. The effective permission is the **intersection**. A source with `access: write` reached by a read-only token is read-only. A write-granted token pointed at a read-only source gets nothing. A source at `access: write` cannot perform schema changes however the token is granted — and `writable_tables` governs DDL targets too, so you may only alter a table you could already write.
 
 There is no global "write mode". There is no `--allow-writes` flag. Enabling writes is always a per-source, per-token decision written down in two places.
 
@@ -84,6 +84,8 @@ Enforced in layers, all of which must hold:
   - **Walk the parse tree with the parser's own visitor, never by reflection.** Under NativeAOT a reflection-based walk returns nothing once types are trimmed, and the guard then classifies `DROP TABLE` as a harmless read while every JIT test still passes. This is not a style note; ADR 0001 hit it.
   - **Classification is exhaustive, not top-level.** A `DELETE` inside a CTE sits under a `SELECT` at the root, and `INSERT ... EXEC` runs a stored procedure while presenting as an `INSERT` — check the insert *source*, not just the statement type.
   - **Statement-type checking cannot see inside function calls.** `SELECT dblink_exec(...)` writes to another host, `lo_export` writes a file, `pg_read_file` reads one — all while classifying as plain reads. Keep a deny-list of known-dangerous functions as a second layer, but understand that this hole is closed by the database `GRANT`, not by us (see principle 5).
+  - **Schema changes are allow-listed at a second level.** On a source at `access: schema`, additive and corrective DDL is permitted — but the statement type decides nothing on its own, because `ADD COLUMN` and `DROP COLUMN` are the same node type in PostgreSQL, and `DROP COLUMN` and `DROP CONSTRAINT` are the same statement type in T-SQL. The guard descends into the subcommand. See [ADR 0002](docs/decisions/0002-ddl-additive-and-corrective.md) for the permitted set and the two rules behind it: never destroy data, never change what an allow-list entry resolves to.
+- **Schema changes do not use the row cap, because it does not apply.** `DROP COLUMN` affects zero rows and destroys a column; before-image journaling has nothing to journal. DDL therefore takes its own path with its own controls — a subcommand allow-list, a **schema before-image** capturing the object's prior definition, and `lock_timeout` as a first-class guard. That last one is not a nicety: an `ALTER TABLE` waiting on `ACCESS EXCLUSIVE` queues every subsequent reader behind it, so a *blocked* DDL statement takes the table down for readers while having changed nothing.
 - **Qualification required** — an `UPDATE` or `DELETE` with no `WHERE` (or a Mongo update with an empty filter) is rejected outright. No exceptions, no override. **A `WHERE`-presence test is not enough**: `WHERE 1=1`, `WHERE true`, and `WHERE id = 1 OR true` are all syntactically qualified and semantically unbounded, so this is predicate analysis on the parse tree, not a null check.
 - **Transactional two-phase execution is the mechanism, and it is also how we count.** The mutation runs inside a transaction that is *not* auto-committed. From that uncommitted execution we read the driver's **real affected-row count** — not an `EXPLAIN` estimate, which lies. If the real count exceeds `max_affected_rows` for the source, the transaction is rolled back and the call refused with the count. The server returns `{affected_rows, diff_sample, handle, requires_approval}`; a separate `commit` call finalises. Uncommitted handles expire and roll back.
   - **Caveat the agent must respect:** an uncommitted runaway mutation still *does the work* (locks, WAL, memory) before we roll it back. So `statement_timeout` is a first-class blast-radius guard, not a nicety, and a cheap pre-check *may* bail out an obviously-unbounded statement before the transaction is even opened. The transaction count is the source of truth for the cap; the pre-check is only an early-out. Which pre-check is worth it is per-engine (see Open questions).
@@ -120,9 +122,11 @@ A single `query` tool is the wrong shape. An agent that runs `SELECT *` and gets
 - `explain` — plan without execution, where the engine supports it
 
 **Write**
-- `propose_write` — parses, validates against all four gates, opens a transaction, returns `{affected_rows, diff_sample, handle, requires_approval}` **without committing**
+- `propose_write` — parses, validates against all four gates, opens a transaction, returns `{kind, affected_rows, diff_sample, handle, requires_approval}` **without committing**
 - `commit_write` — takes a handle; commits, or reports that approval is still pending
 - `abort_write` — explicit rollback
+
+Schema changes go through **the same three tools**, not a parallel set: the lifecycle is identical (parse, gate, open transaction, return a handle, commit) and every new tool costs the consuming agent context on every call. `kind` distinguishes them, and a schema proposal returns `affected_rows: null` with a schema diff in place of a row sample — so the difference is explicit and machine-readable rather than inferred. DDL is transactional on both SQL engines, which is what makes this work; MongoDB cannot do it and is refused at config load.
 
 The agent is structurally forced to look before it leaps, and the human gets an inspection point for free. Every response carries `truncated`, `row_count`, `elapsed_ms`, and `next_cursor` where applicable. Silent truncation is a bug.
 
@@ -169,13 +173,14 @@ server:
       - id: agent-fixer
         secret: ${env:RTFQ_TOKEN_FIXER}
         grants:
-          orders-db: write        # still bounded by the source block below
+          orders-db: schema       # still bounded by the source block below
           catalog: read
 
 defaults:
   max_rows: 1000
   max_affected_rows: 50
   statement_timeout: 15s
+  lock_timeout: 3s                 # bounds DDL lock waits; a blocked ALTER queues every reader behind it
   write_handle_ttl: 2m
 
 sources:
@@ -183,7 +188,7 @@ sources:
     kind: postgres
     dsn: ${env:ORDERS_DSN}
     description: Order lifecycle, fulfilment, returns
-    access: write
+    access: schema                 # read + write + additive/corrective DDL
     require_approval: true         # commit blocks on a human (the intent gate)
     max_affected_rows: 20          # tighter than the default
     schemas: [public, fulfilment]
@@ -227,10 +232,11 @@ Deny beats allow. Default is deny. Absent `access:` means `read`.
    |   x target allow-list  = effective   |
    +--------------------------------------+
    |  statement guard (per-dialect parse;  |
-   |   allow-list statement types, refuse  |
-   |   all others; reject unqualified and  |
-   |   trivially-true predicates; inject   |
-   |   limits; optional unbounded pre-check)|
+   |   allow-list statement types AND DDL  |
+   |   subcommands, refuse all others;     |
+   |   reject unqualified and trivially-   |
+   |   true predicates; inject limits;     |
+   |   optional unbounded pre-check)       |
    +--------------------------------------+
    |  mutation broker (open txn, real     |
    |   affected count, cap check, diff,   |
@@ -248,7 +254,7 @@ Deny beats allow. Default is deny. Absent `access:` means `read`.
    +--------------------------------------+
 ```
 
-The **adapter interface** is the extension point. A new source implements: connect, introspect, sample, execute-read, and — if it supports writes — classify, execute-in-transaction (returning the real affected count), commit, rollback. It declares its capabilities; **a source whose adapter cannot do transactional writes may not be marked `access: write`, and marking it so is a config validation error.** This is why standalone MongoDB (no replica set, no transactions) is read-only: it is refused at config load, loudly, and there is no non-transactional degraded write mode. Do not build one.
+The **adapter interface** is the extension point. A new source implements: connect, introspect, sample, execute-read, and — if it supports writes — classify, execute-in-transaction (returning the real affected count), commit, rollback; plus, if it supports schema changes, classify-schema and schema-before-image. It declares its capabilities; **a source whose adapter cannot do transactional writes may not be marked `access: write`, and one whose adapter cannot do transactional DDL may not be marked `access: schema`. Marking either is a config validation error.** This is why standalone MongoDB (no replica set, no transactions) is read-only, and why *no* MongoDB source may declare `access: schema` — `createIndex` and `dropCollection` cannot be rolled back. Both are refused at config load, loudly, and there is no non-transactional degraded mode for either. Do not build one.
 
 Everything above the adapter layer is source-agnostic. If the core needs to change to accommodate one engine's quirk, the adapter interface is wrong — say so rather than leaking dialect concerns upward.
 
@@ -271,7 +277,9 @@ Everything above the adapter layer is source-agnostic. If the core needs to chan
 - **Question additions to the tool surface.** Every new MCP tool costs the consuming agent context on every call. Adding one needs an argument, not just a use case.
 - **Never weaken a gate.** If a task seems to require bypassing policy, the statement guard, the row cap, or the propose/commit split — stop and flag it. Do not add an override flag.
 - **Approval is the intent gate; never sell auto-commit as safe against malice.** The four structural gates stop blast radius, not a well-formed poisoned write. If a change would let a writable source commit without a human where a small malicious write matters, stop and flag it.
-- **The statement guard is an allow-list. Never turn it into a deny-list.** Adding a statement type is a deliberate act with an argument behind it; the default answer for anything not on the list is no. If a task appears to need schema change, it belongs in a migration, not in RTFQ. And if you catch yourself writing "reject X" where X is a newly-discovered dangerous construct, stop — that is the deny-list creeping back, and the next construct will not be on your list.
+- **The statement guard is an allow-list. Never turn it into a deny-list.** Adding a statement type is a deliberate act with an argument behind it; the default answer for anything not on the list is no. If you catch yourself writing "reject X" where X is a newly-discovered dangerous construct, stop — that is the deny-list creeping back, and the next construct will not be on your list.
+- **For DDL the allow-list has two levels, and the second one is where the danger is.** `ADD COLUMN` and `DROP COLUMN` are the *same* PostgreSQL node type, separated only by a subcommand; `DROP COLUMN` and `DROP CONSTRAINT` share one T-SQL statement type, separated only by the element kind. A guard that stops at the statement type allows data destruction. See [ADR 0002](docs/decisions/0002-ddl-additive-and-corrective.md).
+- **Never let DDL onto the DML path.** The row cap and before-image journal give schema changes zero coverage — `DROP COLUMN` affects zero rows and destroys a column. If a change starts treating a schema statement as "just another mutation", stop and flag it.
 - **Adapters do not leak upward.** If the core needs changing to support one engine's quirk, the adapter interface is wrong. Say so.
 - **The affected-row count comes from the real (uncommitted) transaction, never from an estimate.** Do not "optimise" the cap into an `EXPLAIN`-based guess.
 - **Schema cache serves stale-flagged data when the source is down, never silently.** Offline discovery is a feature, hidden staleness is a bug.

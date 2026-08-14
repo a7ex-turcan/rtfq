@@ -22,6 +22,26 @@ public static class PgSpike
     static readonly HashSet<string> Mutating =
         ["InsertStmt", "UpdateStmt", "DeleteStmt", "MergeStmt"];
 
+    // DDL node types the guard will even consider. RenameStmt and
+    // AlterObjectSchemaStmt are deliberately absent: they rewrite what the write
+    // allow-list refers to, so they are refused by omission rather than by a rule
+    // someone can later soften.
+    static readonly HashSet<string> DdlTypes =
+        ["AlterTableStmt", "IndexStmt", "DropStmt", "RenameStmt", "AlterObjectSchemaStmt", "CreateStmt"];
+
+    // The second level of the allow-list. ALTER TABLE is one node type covering
+    // both ADD COLUMN and DROP COLUMN, so the statement type alone decides nothing.
+    static readonly HashSet<string> AllowedAlterSubtypes =
+    [
+        "AT_AddColumn",
+        "AT_AlterColumnType",
+        "AT_AddConstraint",
+        "AT_DropConstraint",
+        "AT_SetNotNull",
+        "AT_DropNotNull",
+        "AT_ColumnDefault",
+    ];
+
     record Outcome(Verdict Verdict, string Target, string Detail);
 
     public static int Run()
@@ -34,31 +54,9 @@ public static class PgSpike
         _ = Parser.QuickParse("SELECT 1", new ParseOptions());
         cold.Stop();
 
-        int pass = 0, fail = 0;
-        var failures = new List<string>();
-
-        foreach (var c in Corpus.Pg)
-        {
-            var got = Classify(c.Sql);
-            bool ok = got.Verdict == c.Want;
-            bool targetOk = !ok || c.Target.Length == 0 || got.Target == c.Target;
-
-            if (ok && targetOk) pass++;
-            else
-            {
-                fail++;
-                failures.Add($"{c.Name,-22} want={c.Want,-8} got={got.Verdict,-8} target want=\"{c.Target}\" got=\"{got.Target}\" ({got.Detail})");
-            }
-            Console.WriteLine($"{(ok && targetOk ? "PASS" : "FAIL")}  {c.Name,-22} {got.Verdict,-8} {got.Target,-26} {got.Detail}");
-        }
-
-        Console.WriteLine();
-        Console.WriteLine($"RESULT: {pass} passed, {fail} failed, {Corpus.Pg.Length} total");
-        if (failures.Count > 0)
-        {
-            Console.WriteLine("\nFAILURES:");
-            foreach (var f in failures) Console.WriteLine("  " + f);
-        }
+        int fail = 0;
+        fail += RunCorpus("DML and reads", Corpus.Pg);
+        fail += RunCorpus("DDL: additive and corrective only", Corpus.PgDdl);
 
         Console.WriteLine($"\n=== Native library cold start ===");
         Console.WriteLine($"  first parse (incl. native load): {cold.Elapsed.TotalMilliseconds:F1} ms");
@@ -69,6 +67,37 @@ public static class PgSpike
         Latency();
 
         return fail > 0 ? 1 : 0;
+    }
+
+    static int RunCorpus(string title, Case[] cases)
+    {
+        Console.WriteLine($"-- {title} --");
+        int pass = 0, fail = 0;
+        var failures = new List<string>();
+
+        foreach (var c in cases)
+        {
+            var got = Classify(c.Sql);
+            bool ok = got.Verdict == c.Want;
+            bool targetOk = !ok || c.Target.Length == 0 || got.Target == c.Target;
+
+            if (ok && targetOk) pass++;
+            else
+            {
+                fail++;
+                failures.Add($"{c.Name,-26} want={c.Want,-8} got={got.Verdict,-8} target want=\"{c.Target}\" got=\"{got.Target}\" ({got.Detail})");
+            }
+            Console.WriteLine($"{(ok && targetOk ? "PASS" : "FAIL")}  {c.Name,-26} {got.Verdict,-8} {got.Target,-26} {got.Detail}");
+        }
+
+        Console.WriteLine($"RESULT: {pass} passed, {fail} failed, {cases.Length} total");
+        if (failures.Count > 0)
+        {
+            Console.WriteLine("FAILURES:");
+            foreach (var f in failures) Console.WriteLine("  " + f);
+        }
+        Console.WriteLine();
+        return fail;
     }
 
     // --- classification -----------------------------------------------------
@@ -102,6 +131,16 @@ public static class PgSpike
             }
         }
 
+        // DDL takes its own path: the row cap and before-images do not apply to it,
+        // so it cannot be folded into the mutation branch.
+        var ddl = found.Where(DdlTypes.Contains).ToList();
+        if (ddl.Count > 0)
+        {
+            if (ddl.Count > 1 || found.Any(f => !DdlTypes.Contains(f)))
+                return new(Verdict.Reject, "", "mixed DDL and DML");
+            return ClassifyDdl(ddl[0], stmtNodes);
+        }
+
         foreach (var name in found)
             if (!Allowed.Contains(name))
                 return new(Verdict.Reject, "", "disallowed node: " + name);
@@ -126,6 +165,70 @@ public static class PgSpike
         }
 
         return new(Verdict.Mutation, WriteTarget(stmtNodes), "bounded mutation");
+    }
+
+    /// <summary>
+    /// Additive and corrective schema change only. Two things are refused outright
+    /// no matter how they are spelled: anything that destroys data, and anything
+    /// that changes what a write allow-list entry resolves to.
+    /// </summary>
+    static Outcome ClassifyDdl(string nodeType, List<(string Name, JsonElement Body)> nodes)
+    {
+        var body = nodes.First(n => n.Name == nodeType).Body;
+
+        switch (nodeType)
+        {
+            case "RenameStmt":
+                return new(Verdict.Reject, "", "RENAME rewrites what the allow-list refers to");
+
+            case "AlterObjectSchemaStmt":
+                return new(Verdict.Reject, "", "SET SCHEMA rewrites what the allow-list refers to");
+
+            case "CreateStmt":
+                return new(Verdict.Reject, "", "CREATE TABLE is a deploy, not a repair");
+
+            case "DropStmt":
+            {
+                var what = body.TryGetProperty("removeType", out var rt) ? rt.GetString() : null;
+                // DROP INDEX is in scope; DROP TABLE and everything else is not.
+                return what == "OBJECT_INDEX"
+                    ? new(Verdict.Schema, "", "drop index")
+                    : new(Verdict.Reject, "", $"DROP of {what ?? "unknown"} destroys data");
+            }
+
+            case "IndexStmt":
+            {
+                if (body.TryGetProperty("concurrent", out var c) && c.ValueKind == JsonValueKind.True)
+                    return new(Verdict.Reject, "", "CONCURRENTLY cannot run in a transaction, so propose/commit cannot cover it");
+                var rel = body.TryGetProperty("relation", out var r) ? RangeVarName(r) : "";
+                return new(Verdict.Schema, rel, "create index");
+            }
+
+            case "AlterTableStmt":
+            {
+                if (!body.TryGetProperty("cmds", out var cmds) || cmds.ValueKind != JsonValueKind.Array)
+                    return new(Verdict.Reject, "", "ALTER TABLE with no readable subcommand");
+
+                foreach (var cmd in cmds.EnumerateArray())
+                {
+                    if (!cmd.TryGetProperty("AlterTableCmd", out var atc))
+                        return new(Verdict.Reject, "", "unreadable ALTER TABLE subcommand");
+
+                    var subtype = atc.TryGetProperty("subtype", out var st) ? st.GetString() : null;
+                    if (subtype is null || !AllowedAlterSubtypes.Contains(subtype))
+                        return new(Verdict.Reject, "", $"subcommand {subtype ?? "unknown"} not additive/corrective");
+
+                    // ALTER COLUMN ... TYPE ... USING runs an arbitrary transform over
+                    // every row. It looks corrective and can silently destroy data.
+                    if (subtype == "AT_AlterColumnType" && HasKeyAnywhere(atc, "raw_default"))
+                        return new(Verdict.Reject, "", "ALTER COLUMN TYPE ... USING is an arbitrary transform");
+                }
+
+                var target = body.TryGetProperty("relation", out var rv) ? RangeVarName(rv) : "";
+                return new(Verdict.Schema, target, "additive/corrective");
+            }
+        }
+        return new(Verdict.Reject, "", "unhandled DDL node: " + nodeType);
     }
 
     // --- tree helpers --------------------------------------------------------

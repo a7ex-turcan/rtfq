@@ -1,7 +1,18 @@
 namespace Rtfq.Spike;
 
 /// <summary>What the guard must conclude for a statement.</summary>
-public enum Verdict { Read, Mutation, Reject }
+public enum Verdict
+{
+    Read,
+    Mutation,
+    /// <summary>
+    /// Additive or corrective schema change. A separate verdict from Mutation on
+    /// purpose: the row cap and before-image journaling give it zero coverage, so
+    /// it takes a different path with different controls.
+    /// </summary>
+    Schema,
+    Reject
+}
 
 /// <param name="Target">
 /// Schema-qualified relation the guard must resolve for the write allow-list.
@@ -73,8 +84,8 @@ public static class Corpus
             "DCL, so a DDL-only deny-list misses it."),
         new("truncate", "TRUNCATE orders", Verdict.Reject, "",
             "Unbounded delete with no affected-row count to cap."),
-        new("create-index", "CREATE INDEX idx ON orders (id)", Verdict.Reject, "",
-            "DDL."),
+        new("create-index", "CREATE INDEX idx ON orders (id)", Verdict.Schema, "public.orders",
+            "In scope since the DDL policy changed; see PgDdl for the full battery."),
         new("drop-table", "DROP TABLE orders", Verdict.Reject, "",
             "DDL baseline."),
         new("set-role", "SET ROLE postgres", Verdict.Reject, "",
@@ -101,6 +112,89 @@ public static class Corpus
             "Qualified via subquery; the read side is not a second write target."),
         new("merge", "MERGE INTO orders o USING staging s ON o.id = s.id WHEN MATCHED THEN UPDATE SET vip = s.vip", Verdict.Mutation, "public.orders",
             "MERGE is DML that neither UPDATE nor INSERT node types cover."),
+    ];
+
+    /// <summary>
+    /// DDL battery. The policy is additive and corrective only: change a table so
+    /// it holds the right shape of data, never destroy data and never rewrite what
+    /// the write allow-list refers to.
+    ///
+    /// The load-bearing subtlety: ALTER TABLE is ONE statement type covering both
+    /// ADD COLUMN and DROP COLUMN, so a statement-type allow-list is not enough
+    /// here. The guard must descend into the subcommand.
+    /// </summary>
+    public static readonly Case[] PgDdl =
+    [
+        // --- additive / corrective: allowed ---------------------------------
+        new("add-column", "ALTER TABLE orders ADD COLUMN email text", Verdict.Schema, "public.orders",
+            "The archetypal \"go fix that table\"."),
+        new("add-column-default", "ALTER TABLE orders ADD COLUMN tier int NOT NULL DEFAULT 0", Verdict.Schema, "public.orders",
+            "Cheap on PG11+; on older engines a full table rewrite under an exclusive lock."),
+        new("alter-column-type", "ALTER TABLE orders ALTER COLUMN name TYPE varchar(200)", Verdict.Schema, "public.orders",
+            "Corrective widening."),
+        new("add-constraint", "ALTER TABLE orders ADD CONSTRAINT chk_total CHECK (total >= 0)", Verdict.Schema, "public.orders",
+            "Tightens integrity; additive."),
+        new("drop-constraint", "ALTER TABLE orders DROP CONSTRAINT chk_total", Verdict.Schema, "public.orders",
+            "Inverse of the above. Destroys no data and is re-appliable."),
+        new("set-not-null", "ALTER TABLE orders ALTER COLUMN email SET NOT NULL", Verdict.Schema, "public.orders",
+            "Corrective."),
+        new("create-index", "CREATE INDEX idx_orders_email ON orders (email)", Verdict.Schema, "public.orders",
+            "Explicitly in scope."),
+        new("drop-index", "DROP INDEX idx_orders_email", Verdict.Schema, "",
+            "Explicitly in scope: an agent must be able to remove an index it added."),
+
+        // --- destroys data: refused ------------------------------------------
+        new("drop-column", "ALTER TABLE orders DROP COLUMN email", Verdict.Reject, "",
+            "Affects zero ROWS and destroys every value in the column: max_affected_rows offers nothing."),
+        new("drop-table", "DROP TABLE orders", Verdict.Reject, "",
+            "Destroys everything."),
+        new("truncate", "TRUNCATE orders", Verdict.Reject, "",
+            "Unbounded delete with no affected-row count to cap."),
+
+        // --- rewrites what the allow-list refers to: refused -------------------
+        new("rename-table", "ALTER TABLE orders RENAME TO orders_old", Verdict.Reject, "",
+            "Empties the allow-list entry public.orders; a new table created as orders inherits the grant."),
+        new("set-schema", "ALTER TABLE orders SET SCHEMA secret", Verdict.Reject, "",
+            "Same attack via a different node type."),
+        new("rename-column", "ALTER TABLE orders RENAME COLUMN email TO email_old", Verdict.Reject, "",
+            "Destroys no data, but silently breaks every caller. Refused as a judgment call, not a safety proof."),
+
+        // --- adjacent things that are not "fixing a table" ---------------------
+        new("create-table", "CREATE TABLE audit_notes (id int)", Verdict.Reject, "",
+            "Adding a table is a deploy, not a repair; and the new table is on no allow-list."),
+        new("create-index-concurrently", "CREATE INDEX CONCURRENTLY idx ON orders (email)", Verdict.Reject, "",
+            "Cannot run inside a transaction block, so it cannot use propose/commit at all."),
+        new("alter-column-type-using", "ALTER TABLE orders ALTER COLUMN total TYPE int USING left(total, 3)::int", Verdict.Reject, "",
+            "The USING clause is an arbitrary transform: silent, unbounded data loss inside a corrective-looking statement."),
+    ];
+
+    public static readonly Case[] TSqlDdl =
+    [
+        new("add-column", "ALTER TABLE orders ADD email nvarchar(200)", Verdict.Schema, "dbo.orders",
+            "The archetypal \"go fix that table\"."),
+        new("alter-column-type", "ALTER TABLE orders ALTER COLUMN name nvarchar(400)", Verdict.Schema, "dbo.orders",
+            "Corrective widening."),
+        new("add-constraint", "ALTER TABLE orders ADD CONSTRAINT chk_total CHECK (total >= 0)", Verdict.Schema, "dbo.orders",
+            "Additive."),
+        new("create-index", "CREATE INDEX ix_orders_email ON orders (email)", Verdict.Schema, "dbo.orders",
+            "Explicitly in scope."),
+        new("drop-index", "DROP INDEX ix_orders_email ON orders", Verdict.Schema, "dbo.orders",
+            "Explicitly in scope."),
+
+        new("drop-column", "ALTER TABLE orders DROP COLUMN email", Verdict.Reject, "",
+            "Destroys a column's data while affecting zero rows."),
+        new("drop-constraint", "ALTER TABLE orders DROP CONSTRAINT chk_total", Verdict.Schema, "dbo.orders",
+            "Same node type as DROP COLUMN in T-SQL: the element kind is what separates them."),
+        new("drop-table", "DROP TABLE orders", Verdict.Reject, "",
+            "Destroys everything."),
+        new("truncate", "TRUNCATE TABLE orders", Verdict.Reject, "",
+            "Banned."),
+        new("create-table", "CREATE TABLE audit_notes (id int)", Verdict.Reject, "",
+            "A deploy, not a repair."),
+        new("alter-schema-transfer", "ALTER SCHEMA secret TRANSFER dbo.orders", Verdict.Reject, "",
+            "T-SQL's SET SCHEMA: rewrites what the allow-list refers to."),
+        new("sp-rename", "EXEC sp_rename 'orders', 'orders_old'", Verdict.Reject, "",
+            "Rename via stored procedure - already blocked as EXEC, which is why EXEC stays blocked."),
     ];
 
     public static readonly Case[] TSql =

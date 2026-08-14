@@ -10,11 +10,16 @@ must make, with a note on what it probes. That file graduates to the guard's tes
 ## Running it
 
 ```bash
-dotnet run -- pg        # PostgreSQL corpus, 35 cases   (Npgquery / libpg_query)
-dotnet run -- tsql      # SQL Server corpus, 20 cases   (Microsoft ScriptDom)
+dotnet run -- pg        # PostgreSQL: 35 DML/read cases + 17 DDL   (Npgquery / libpg_query)
+dotnet run -- tsql      # SQL Server: 20 DML/read cases + 12 DDL   (Microsoft ScriptDom)
 dotnet run -- anomaly   # why libpg_query accepts "SELECT 1 @@@@ DELETE FROM orders"
 dotnet run -- probe     # Npgquery's real API surface, by reflection
 ```
+
+The DDL batteries back [ADR 0002](../../docs/decisions/0002-ddl-additive-and-corrective.md), whose load-bearing
+finding is that a statement-type allow-list is **not sufficient** for schema changes: `ADD COLUMN` and
+`DROP COLUMN` are the same PostgreSQL node type, and `DROP COLUMN` and `DROP CONSTRAINT` are the same T-SQL
+statement type. The allow-list has to descend a level.
 
 `pg` and `tsql` exit non-zero on any corpus failure, so they work as a regression check.
 

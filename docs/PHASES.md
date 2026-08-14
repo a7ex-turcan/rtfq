@@ -233,6 +233,11 @@ Writes for any adapter (M3) — including Mongo, whose transactional story is th
    `WHERE ... OR true`) count as unqualified. Plus the three mechanics ADR 0001 identified: a function-name
    deny-list, `InsertSource` restriction for T-SQL, and a pinned `search_path`/default schema so allow-list
    entries resolve to the same relation the server does.
+3. **Schema-change path** — [ADR 0002](decisions/0002-ddl-additive-and-corrective.md). A third verdict
+   (`Schema`), a **second-level allow-list over DDL subcommands** (statement type alone cannot separate
+   `ADD COLUMN` from `DROP COLUMN`), `access: schema` as a third permission level, schema before-images, and
+   `lock_timeout` as a required setting. Reuses `propose_write`/`commit_write` rather than adding tools.
+   Mongo sources declaring `access: schema` fail config validation.
 3. **Mutation broker** — open transaction, execute uncommitted, read the driver's **real affected-row count**,
    compare to `max_affected_rows`, roll back and refuse with the count if exceeded. Never an estimate.
 4. **Handles** — bound to the exact statement that produced them (hash-bound, non-repointable), TTL'd, rolled back
@@ -246,7 +251,9 @@ Writes for any adapter (M3) — including Mongo, whose transactional story is th
 8. **Adversarial test suite, per dialect** — the actual deliverable. It must include, at minimum: DDL smuggled
    through comments, `;`-stacked statements, CTE-wrapped writes, `WHERE 1=1`, quoted identifiers matching an
    allow-list entry by string but not by resolution, cross-schema aliasing, unicode/homoglyph table names,
-   `search_path` games, and a mutation that exceeds the cap by exactly one row.
+   `search_path` games, and a mutation that exceeds the cap by exactly one row. For DDL: `DROP COLUMN` presented
+   as an `ALTER TABLE`, `ALTER COLUMN ... USING`, `RENAME`, `SET SCHEMA`, and `CREATE INDEX CONCURRENTLY`.
+   The 84-case corpus in `spike/parser/Corpus.cs` is the starting point, not the finished suite.
 
 ### Not in this phase
 
@@ -261,7 +268,10 @@ test surface structural.
 - ✅ A mutation one row over the cap is refused with the real count, and the transaction is provably rolled back
   (verified by re-reading the rows).
 - ✅ An expired handle rolls back automatically; a handle cannot be re-pointed at a different statement.
-- ✅ Every mutation has before-images in the audit log, traceable to the read that preceded it.
+- ✅ Every mutation has before-images in the audit log, traceable to the read that preceded it; every schema
+  change has the object's prior definition journaled.
+- ✅ No schema statement can destroy data or change what a write allow-list entry resolves to — verified per
+  dialect at the **subcommand** level, not the statement-type level.
 - ✅ Server killed mid-transaction leaves no committed partial write.
 
 ### Risks and decisions
@@ -409,5 +419,7 @@ These are not phases; they are properties every phase maintains.
 | Proactive vs. serve-stale-then-refresh | M1 | Whichever keeps `describe_*` fast (`CLAUDE.md` open question) |
 | Affected-row pre-check form | M3 | Parse-tree predicate check, never `EXPLAIN` (`CLAUDE.md` open question) |
 | Before-image size ceiling | M3 | Truncate-with-marker (`CLAUDE.md` open question) |
+| Approval default for schema changes | M3/M4 | Stays per-source — destructive DDL is refused structurally ([ADR 0002](decisions/0002-ddl-additive-and-corrective.md)) |
+| Table-rewrite cost estimation for DDL | M3 | Probably not; rely on `lock_timeout` + `statement_timeout` ([ADR 0002](decisions/0002-ddl-additive-and-corrective.md)) |
 | Approval-provider plugin mechanism | M4 | Generic webhook provider in core; Slack built against it |
 | Identity beyond static tokens | post-M5 | Defer (`CLAUDE.md` open question) |
