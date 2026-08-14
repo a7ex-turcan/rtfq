@@ -52,20 +52,46 @@ jobs:
       - name: Publish NativeAOT
         run: dotnet publish src/Rtfq.Cli -c Release -r linux-x64 -o out
 
+      # The sample references its secrets rather than inlining them, so validating
+      # it requires the same variables an operator would export.
       - name: Smoke-test the published binary
+        env:
+          RTFQ_TOKEN_AGENT: ci-smoke-token
+          ORDERS_DSN: Host=localhost;Port=5432;Database=orders;Username=rtfq
         run: |
           ./out/rtfq --version
           ./out/rtfq validate --config examples/rtfq.dev.yaml
 
-      # Production mode must reject the development sample: its secrets are inline
-      # and it has no TLS. If this ever exits 0, the rule has stopped working.
+      # Production mode must refuse the development sample, which listens without
+      # TLS. Asserting the specific check keeps this a regression test: exiting
+      # non-zero for some other reason would otherwise look like a pass.
       - name: Production mode refuses the development sample
+        env:
+          RTFQ_TOKEN_AGENT: ci-smoke-token
+          ORDERS_DSN: Host=localhost;Port=5432;Database=orders;Username=rtfq
         run: |
-          if ./out/rtfq validate --config examples/rtfq.dev.yaml --production; then
-            echo "::error::production validation accepted a config with inline secrets and no TLS"
+          if output=$(./out/rtfq validate --config examples/rtfq.dev.yaml --production 2>&1); then
+            echo "::error::production validation accepted a config with no TLS"
             exit 1
           fi
-          echo "refused as expected"
+          echo "$output"
+          echo "$output" | grep -q 'server.tls.production' || {
+            echo "::error::refused, but not by the TLS rule this step exists to test"
+            exit 1
+          }
+
+      # Unresolvable secrets must fail loudly rather than defaulting to empty.
+      # This exact case broke the first CI run, so it stays as a regression test.
+      - name: Unresolvable secret references are refused
+        run: |
+          if output=$(./out/rtfq validate --config examples/rtfq.dev.yaml 2>&1); then
+            echo "::error::validation passed with RTFQ_TOKEN_AGENT and ORDERS_DSN unset"
+            exit 1
+          fi
+          echo "$output" | grep -q 'config.secret_unresolved' || {
+            echo "::error::refused, but not by the unresolved-secret rule"
+            exit 1
+          }
 
       - uses: actions/upload-artifact@v4
         with:
