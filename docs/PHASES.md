@@ -168,8 +168,10 @@ Non-Postgres adapters (M2) · anything that mutates (M3).
 
 ### Scope
 
-1. **Parser spike (do this first — it gates M3).** See the decision below. Its output is a written choice of
-   parser per dialect and a build-implications note.
+1. ~~**Parser spike (do this first — it gates M3).**~~ **Done — [ADR 0001](decisions/0001-sql-parser-selection.md).**
+   PostgreSQL uses `wasilibs/go-pgquery` (libpg_query compiled to wasm), SQL Server uses `sqlc-dev/teesql`
+   (pure Go, ScriptDom-shaped AST). Both run with `CGO_ENABLED=0`, so the single-static-binary requirement and
+   the real-parser requirement do not conflict after all, and M5's release pipeline stays simple.
 2. **SQL Server adapter** — `go-mssqldb`; introspection, read, `SET SHOWPLAN_XML` for `explain`.
 3. **MongoDB adapter** — official driver; introspection is schema *inference* over sampled documents, and it must
    be honest about being inferred. **Standalone (no replica set, no transactions) fails config validation when
@@ -196,13 +198,14 @@ Writes for any adapter (M3) — including Mongo, whose transactional story is th
 
 ### Risks and decisions
 
-- ❓ **Parser choice per dialect — the biggest technical risk in the project.** `CLAUDE.md` names `pg_query_go`
-  (a wrapper around Postgres's own parser, so the most correct option by a wide margin) — but it is **cgo**, which
-  works against "single static binary by default" and makes cross-compilation materially harder (musl/static
-  linking per platform, or per-platform build runners). The trade is real:
-  correctness ⟷ build simplicity. Pure-Go alternatives exist for Postgres and are less faithful.
-  **T-SQL is worse:** there is no equivalent-quality pure-Go parser, and regex is forbidden by the working
-  agreements. Resolve this before M3 starts; it may constrain the release pipeline in M5.
+- ✔ **Parser choice per dialect — resolved by [ADR 0001](decisions/0001-sql-parser-selection.md)**, and it
+  resolved better than expected: `go-pgquery` runs PostgreSQL's *own* parser compiled to WebAssembly on a pure-Go
+  runtime, so there is no correctness-versus-build-simplicity trade to make. Adversarial corpus: 35/35 Postgres,
+  19/19 T-SQL, five cross-compile targets, no C toolchain. Residual risk moved to the dependency itself —
+  `teesql` is young and lenient, so pin it, vendor it, and keep the corpus as a regression suite.
+- ⚠ **The guard is an allow-list, not a DDL deny-list** — an ADR 0001 finding that changes this phase's shape.
+  `COPY ... FROM PROGRAM`, `DO`, `EXPLAIN ANALYZE`, `GRANT`, `SET ROLE` and `EXEC xp_cmdshell` are none of them
+  DDL, and all of them are catastrophic. Execute only the enumerated node types; refuse everything else by default.
 - ⚠ **Mongo's "statement" is not a string.** If the guard interface assumes SQL text, Mongo will bend the core —
   exactly the leak this phase exists to catch. Classification belongs to the adapter; the core sees a
   *classification result*, not a dialect.
@@ -217,8 +220,12 @@ Writes for any adapter (M3) — including Mongo, whose transactional story is th
 
 1. **Four structural gates**, evaluated in order, each independently tested and each producing a distinct error code:
    source writable → token granted → target allow-listed → statement passes the guard.
-2. **Statement guard** — per-dialect real parse; classify read / DML / DDL. **DDL rejected always.** Unqualified
-   `UPDATE`/`DELETE` (and empty-filter Mongo updates) rejected outright, no override.
+2. **Statement guard** — per-dialect real parse, then an **allow-list of statement node types** (not a DDL
+   deny-list — see [ADR 0001](decisions/0001-sql-parser-selection.md)). Unqualified `UPDATE`/`DELETE` (and
+   empty-filter Mongo updates) rejected outright, no override; trivially-true predicates (`WHERE 1=1`,
+   `WHERE ... OR true`) count as unqualified. Plus the three mechanics ADR 0001 identified: a function-name
+   deny-list, `InsertSource` restriction for T-SQL, and a pinned `search_path`/default schema so allow-list
+   entries resolve to the same relation the server does.
 3. **Mutation broker** — open transaction, execute uncommitted, read the driver's **real affected-row count**,
    compare to `max_affected_rows`, roll back and refuse with the count if exceeded. Never an estimate.
 4. **Handles** — bound to the exact statement that produced them (hash-bound, non-repointable), TTL'd, rolled back
@@ -376,7 +383,8 @@ These are not phases; they are properties every phase maintains.
 | State-directory convention | M0 | OS-appropriate default, `--state-dir` override, atomic file writes |
 | Error-code naming scheme | M0 | `domain.reason`, stable across releases |
 | Cursor pagination semantics | M1 | Re-execute with offset, `snapshot: false` in the envelope |
-| Parser per dialect (cgo trade-off) | M2, gates M3 | Unresolved — spike first; T-SQL is the hard one |
+| ~~Parser per dialect (cgo trade-off)~~ | ~~M2, gates M3~~ | **Settled — [ADR 0001](decisions/0001-sql-parser-selection.md).** wasm libpg_query + teesql, both `CGO_ENABLED=0` |
+| Function-call deny-list contents | M3 | Cover the known-dangerous set; the scoped `GRANT` is the real boundary ([ADR 0001](decisions/0001-sql-parser-selection.md)) |
 | Proactive vs. serve-stale-then-refresh | M1 | Whichever keeps `describe_*` fast (`CLAUDE.md` open question) |
 | Affected-row pre-check form | M3 | Parse-tree predicate check, never `EXPLAIN` (`CLAUDE.md` open question) |
 | Before-image size ceiling | M3 | Truncate-with-marker (`CLAUDE.md` open question) |
