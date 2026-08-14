@@ -50,8 +50,11 @@ Thin but not fake — nothing here gets thrown away.
 
 ### Scope
 
-1. **Toolchain and repo skeleton.** Go is not installed on the dev box yet — that is step one. Pin the toolchain
-   in `go.mod`, add `Makefile`/`Taskfile`, `golangci-lint`, and CI (build + vet + lint + test on push).
+1. **Toolchain and repo skeleton.** Pin the SDK in `global.json`, add `Directory.Build.props` with
+   `TreatWarningsAsErrors`, `Nullable`, `IsAotCompatible` and analyzers enabled, plus `.editorconfig` and CI
+   (build + analyzers + test on push). **CI must also publish the NativeAOT binary and run the guard suite
+   against it** — [ADR 0001](decisions/0001-sql-parser-selection.md) found a guard that passes 20/20 under the
+   JIT and fails open as a published binary, so a JIT-only test run does not tell us what shipped.
 2. **Package layout** (see [below](#package-layout)). Create the directories with their interfaces, even where
    the only implementation is Postgres.
 3. **Config loader** — YAML → typed struct. Secret resolution for `${env:...}` and `${file:...}`
@@ -61,7 +64,7 @@ Thin but not fake — nothing here gets thrown away.
    Every "this is a config validation error, not a warning" rule in `CLAUDE.md` gets registered here as a named
    check, even the ones whose subject doesn't exist yet (Mongo-standalone, HTTP wildcard + write). An empty
    check that is wired up is cheap; a validation framework retrofitted in M2 is not.
-5. **Wire contract** — `internal/api`: request/response DTOs, the response envelope
+5. **Wire contract** — `Rtfq.Contracts`: request/response DTOs, the response envelope
    (`row_count`, `truncated`, `elapsed_ms`, `next_cursor`), and the **error taxonomy**.
 6. **Transport** — HTTP+JSON over TLS, token auth middleware (constant-time compare), request IDs, structured
    logging. **TLS is mandatory unless the listener is loopback** — a rule, not a config knob.
@@ -70,7 +73,7 @@ Thin but not fake — nothing here gets thrown away.
    is fixed now.
 8. **Adapter interface + Postgres adapter** — `connect`, `introspect`, `sample`, `execute-read`, plus a
    `Capabilities()` declaration. Write-side methods exist on the interface and return "unsupported" until M3.
-   `pgx` for the driver.
+   Npgsql for the driver.
 9. **Row cap and statement timeout.** M0 enforces the cap by **stopping the row scan** at `max_rows + 1` and
    setting `truncated: true` — real LIMIT injection needs the parser and lands in M1. `statement_timeout` is set
    on the connection from day one; per `CLAUDE.md` it is a blast-radius guard, not a nicety.
@@ -78,8 +81,8 @@ Thin but not fake — nothing here gets thrown away.
     Before-images land in M3. *This is an addition to M0 as written in `CLAUDE.md`* — deliberate, because an
     audit sink threaded through the request path afterwards is a rewrite, and "every request is audited" is only
     true if it was never optional.
-11. **CLI** — `rtfq serve`, `rtfq query`, `rtfq sources`, `rtfq validate`. Thin client over `internal/client`.
-12. **Test harness** — testcontainers-go against real Postgres. No mocks for adapters, per the working agreements.
+11. **CLI** — `rtfq serve`, `rtfq query`, `rtfq sources`, `rtfq validate`. Thin client over `Rtfq.Client`.
+12. **Test harness** — Testcontainers for .NET against real Postgres. No mocks for adapters, per the working agreements.
 
 ### Not in this phase
 
@@ -169,10 +172,11 @@ Non-Postgres adapters (M2) · anything that mutates (M3).
 ### Scope
 
 1. ~~**Parser spike (do this first — it gates M3).**~~ **Done — [ADR 0001](decisions/0001-sql-parser-selection.md).**
-   PostgreSQL uses `wasilibs/go-pgquery` (libpg_query compiled to wasm), SQL Server uses `sqlc-dev/teesql`
-   (pure Go, ScriptDom-shaped AST). Both run with `CGO_ENABLED=0`, so the single-static-binary requirement and
-   the real-parser requirement do not conflict after all, and M5's release pipeline stays simple.
-2. **SQL Server adapter** — `go-mssqldb`; introspection, read, `SET SHOWPLAN_XML` for `explain`.
+   PostgreSQL uses `Npgquery` (libpg_query via P/Invoke — PostgreSQL's own parser), SQL Server uses
+   `Microsoft.SqlServer.TransactSql.ScriptDom` (first-party Microsoft). Both clear the adversarial corpus as
+   published NativeAOT binaries. The sting is in the tail: the ADR found that reflection-based AST walking is a
+   **fail-open guard** under AOT, so the guard uses the parser's own visitor and CI tests the published artifact.
+2. **SQL Server adapter** — `Microsoft.Data.SqlClient`; introspection, read, `SET SHOWPLAN_XML` for `explain`.
 3. **MongoDB adapter** — official driver; introspection is schema *inference* over sampled documents, and it must
    be honest about being inferred. **Standalone (no replica set, no transactions) fails config validation when
    marked `access: write`** — loudly, at load, with no degraded write mode. The check registered in M0 gets its
@@ -191,18 +195,21 @@ Writes for any adapter (M3) — including Mongo, whose transactional story is th
 
 - ✅ All four adapters pass a shared conformance suite (connect, introspect, sample, read, cap, timeout, unreachable)
   against real containerized instances.
-- ✅ The interface audit lists **zero** dialect-specific branches above `internal/adapter/`. Any that exist are
+- ✅ The interface audit lists **zero** dialect-specific branches above `Rtfq.Adapters`. Any that exist are
   written up as interface bugs with a fix, per the working agreements.
 - ✅ Config validation rejects: Mongo-standalone marked writable; HTTP wildcard + `POST`.
 - ✅ `describe_*` output for Mongo marks inferred schema as inferred, with the sample size it was inferred from.
 
 ### Risks and decisions
 
-- ✔ **Parser choice per dialect — resolved by [ADR 0001](decisions/0001-sql-parser-selection.md)**, and it
-  resolved better than expected: `go-pgquery` runs PostgreSQL's *own* parser compiled to WebAssembly on a pure-Go
-  runtime, so there is no correctness-versus-build-simplicity trade to make. Adversarial corpus: 35/35 Postgres,
-  19/19 T-SQL, five cross-compile targets, no C toolchain. Residual risk moved to the dependency itself —
-  `teesql` is young and lenient, so pin it, vendor it, and keep the corpus as a regression suite.
+- ✔ **Parser choice per dialect — resolved by [ADR 0001](decisions/0001-sql-parser-selection.md)**, and both
+  dialects get the genuine article: Microsoft's own ScriptDom for T-SQL, PostgreSQL's own parser via libpg_query.
+  Adversarial corpus: 35/35 Postgres, 20/20 T-SQL, verified on the published AOT binary as well as under the JIT.
+  Residual risk sits on the Postgres wrapper — `Npgquery` is at 1.1.0 with two releases — so pin it and keep the
+  corpus as a regression suite on every bump. libpg_query itself is the stable part.
+- ⚠ **A native dependency means "single binary" needs a decision, not an assumption.** AOT publishes the
+  executable *plus* `libpg_query.so`; a true single file costs 44 MB and a slower start. Numbers are in the ADR;
+  choose the release shape in M5 rather than discovering it there.
 - ⚠ **The guard is an allow-list, not a DDL deny-list** — an ADR 0001 finding that changes this phase's shape.
   `COPY ... FROM PROGRAM`, `DO`, `EXPLAIN ANALYZE`, `GRANT`, `SET ROLE` and `EXEC xp_cmdshell` are none of them
   DDL, and all of them are catastrophic. Execute only the enumerated node types; refuse everything else by default.
@@ -298,10 +305,10 @@ Slack. It stays behind the same interface and out of core, per `CLAUDE.md`.
 
 ### Risks and decisions
 
-- ❓ **What "plugin" means in Go.** Go has no comfortable dynamic plugin story. Realistic options for Slack:
-  a generic **webhook provider in core** that an external Slack bot implements (keeps core clean, one extra hop),
-  or a **build-tagged optional import** (one binary, but Slack code ships in the repo). Lean webhook — it keeps the
-  `CLAUDE.md` promise that Slack is never in core, and any provider can be built against it.
+- ❓ **What "plugin" means under NativeAOT.** AOT rules out `AssemblyLoadContext` and runtime plugin loading, so
+  the .NET answer is the same as the Go one for different reasons: a generic **webhook provider in core** that an
+  external Slack bot implements. It keeps the `CLAUDE.md` promise that Slack is never in core, and any provider
+  can be built against it without linking into our binary.
 - ⚠ **Approval fatigue is a real failure mode.** If approving is tedious, people will set `require_approval: false`
   and the intent gate is gone. The reference implementation's ergonomics are a security property.
 
@@ -314,8 +321,12 @@ pointing this at production.
 
 ### Scope
 
-1. **Release pipeline** — reproducible single-binary builds for linux/darwin/windows × amd64/arm64. Constrained by
-   the M2 parser decision if it forced cgo.
+1. **Release pipeline** — NativeAOT builds per RID. Two constraints from
+   [ADR 0001](decisions/0001-sql-parser-selection.md): AOT does **not** cross-compile across operating systems, so
+   each target OS needs its own build container or agent; and `Npgquery` ships no `osx-x64` native payload, so
+   Intel Macs are unsupported unless we build libpg_query ourselves.
+   **Decide the artifact shape here**: AOT (executable + `libpg_query.so`, ~18 MB, 0.6 ms start) or self-contained
+   single-file (one file, 44 MB, 15.5 ms start).
 2. **Docker image** — a convenience, not the deployment model.
 3. **Quickstart** — install → minimal `rtfq.yaml` → `rtfq serve` → first query, under five minutes, tested on a
    clean machine by someone who did not write it.
@@ -328,35 +339,43 @@ pointing this at production.
 ### Exit criteria
 
 - ✅ Clean-machine quickstart timed under five minutes by someone other than the author.
-- ✅ Release artifacts verified on each target platform.
+- ✅ Release artifacts verified on each target platform — by **running the guard suite against the published
+  binary**, not by checking that it starts.
 - ✅ Security posture doc reviewed by someone who did not write the code.
 - ✅ README carries the honest one-paragraph version of the threat model, not a marketing paragraph.
 
 ---
 
-## Package layout
+## Project layout
 
-Provisional, established in M0 so later phases have somewhere to land:
+Provisional, established in M0 so later phases have somewhere to land. One solution, one shipped executable:
 
 ```
-cmd/rtfq/              # single binary: serve, query, sources, describe, validate, refresh, unlock, mcp
-internal/
-  api/                 # wire DTOs, response envelope, error taxonomy   (the stable contract)
-  config/              # load, secret resolution, validation checks
-  server/              # HTTP+JSON, TLS, auth middleware, handlers
-  policy/              # grant x access x allow-list -> effective permission
-  guard/               # classification results; per-dialect parsing lives in adapters
-  broker/              # transactions, handles, TTL, caps, approval hookup
-  audit/               # append-only JSONL, before-images
-  schema/              # introspection model, cache, staleness
-  adapter/             # Adapter interface + capabilities
-    postgres/ mssql/ mongo/ http/
-  client/              # HTTP client shared by CLI and MCP
-  mcp/                 # MCP tool definitions -> client calls (thin, no logic)
+src/
+  Rtfq.Cli/              # the executable: serve, query, sources, describe, validate, refresh, unlock, mcp
+  Rtfq.Contracts/        # wire DTOs, response envelope, error taxonomy   (the stable contract)
+  Rtfq.Server/           # HTTP+JSON, TLS, auth, endpoints
+    Config/              #   load, secret resolution, validation checks
+    Policy/              #   grant x access x allow-list -> effective permission
+    Guard/               #   statement classification; per-dialect parsing lives in adapters
+    Broker/              #   transactions, handles, TTL, caps, approval hookup
+    Audit/               #   append-only JSONL, before-images
+    Schema/              #   introspection model, cache, staleness
+  Rtfq.Adapters/         # ISourceAdapter + capabilities
+    Postgres/ SqlServer/ Mongo/ Http/
+  Rtfq.Client/           # HTTP client shared by CLI and MCP
+  Rtfq.Mcp/              # MCP tool definitions -> client calls (thin, no logic)
+tests/
+  Rtfq.Guard.Tests/      # the adversarial suite; also run against the published AOT binary
+  Rtfq.Adapters.Tests/   # Testcontainers, one real instance per adapter
 docs/
 ```
 
-Everything above `adapter/` is source-agnostic. If that stops being true, the interface is wrong.
+Everything above `Rtfq.Adapters` is source-agnostic. If that stops being true, the interface is wrong.
+
+Two AOT constraints shape this from M0, both from [ADR 0001](decisions/0001-sql-parser-selection.md): no
+reflection over parse trees, and no reflection-based serialization — use `System.Text.Json` source generators for
+the wire DTOs and the audit log.
 
 ---
 
@@ -369,7 +388,8 @@ These are not phases; they are properties every phase maintains.
 | **Error taxonomy** | Stable machine-readable codes. Agents branch on them, so they are API surface. |
 | **Response envelope** | `row_count`, `truncated`, `elapsed_ms`, `next_cursor`, staleness. Silent truncation is a bug. |
 | **Audit** | Every request, including refusals. Never optional, never shipped off the box. |
-| **Tests** | Real containerized instances per adapter. Read-only-enforcement and mutation-guard suites are adversarial. |
+| **Tests** | Real containerized instances per adapter. Read-only-enforcement and mutation-guard suites are adversarial, and run against the **published AOT binary**, not only the JIT build. |
+| **AOT discipline** | No reflection over parse trees, no reflection-based serialization. Trim/AOT warnings are build errors. A trimmed reflection walk fails **open** — see [ADR 0001](decisions/0001-sql-parser-selection.md). |
 | **Defaults** | Caps, timeouts, and TTLs are contract. Changing one is an API change. |
 | **Config knobs** | Prefer deleting a feature. A new knob needs an argument, not a use case. |
 | **Tool surface** | Every new MCP tool costs the consuming agent context on every call. Adding one needs an argument. |
@@ -383,7 +403,8 @@ These are not phases; they are properties every phase maintains.
 | State-directory convention | M0 | OS-appropriate default, `--state-dir` override, atomic file writes |
 | Error-code naming scheme | M0 | `domain.reason`, stable across releases |
 | Cursor pagination semantics | M1 | Re-execute with offset, `snapshot: false` in the envelope |
-| ~~Parser per dialect (cgo trade-off)~~ | ~~M2, gates M3~~ | **Settled — [ADR 0001](decisions/0001-sql-parser-selection.md).** wasm libpg_query + teesql, both `CGO_ENABLED=0` |
+| ~~Parser per dialect~~ | ~~M2, gates M3~~ | **Settled — [ADR 0001](decisions/0001-sql-parser-selection.md).** ScriptDom for T-SQL, libpg_query for Postgres |
+| Release artifact shape (AOT two-file vs single-file) | M5 | Numbers in [ADR 0001](decisions/0001-sql-parser-selection.md); lean AOT + tarball |
 | Function-call deny-list contents | M3 | Cover the known-dangerous set; the scoped `GRANT` is the real boundary ([ADR 0001](decisions/0001-sql-parser-selection.md)) |
 | Proactive vs. serve-stale-then-refresh | M1 | Whichever keeps `describe_*` fast (`CLAUDE.md` open question) |
 | Affected-row pre-check form | M3 | Parse-tree predicate check, never `EXPLAIN` (`CLAUDE.md` open question) |

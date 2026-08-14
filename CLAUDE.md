@@ -25,7 +25,13 @@ The server owns a config file declaring data sources: SQL Server, PostgreSQL, Mo
 
 ## Language and runtime — settled
 
-**Go.** The hard requirement is a single static binary; the load-bearing constraints are per-dialect SQL parsing and mature drivers for Postgres / SQL Server / MongoDB. Go satisfies all three: static binaries by default, first-class `pgx` / `go-mssqldb` / official Mongo driver, and real parser libraries (e.g. `pg_query_go` wrapping Postgres's own parser). Rust was considered and rejected for this project: parser and driver maturity across four ecosystems costs more than its safety buys us here. If a future constraint genuinely breaks Go, raise it explicitly, do not drift.
+**C# on .NET 10.** The hard requirement is a single self-hosted binary with no runtime to install; the load-bearing constraints are per-dialect SQL parsing and mature drivers for Postgres / SQL Server / MongoDB. .NET satisfies all three. Drivers are first-class across the board — Npgsql, `Microsoft.Data.SqlClient`, and the official MongoDB driver. Parsing is better than it looks: SQL Server gets **Microsoft's own ScriptDom**, the first-party parser behind SSMS and SqlPackage, and PostgreSQL gets **libpg_query** — Postgres's actual parser — through a P/Invoke wrapper. Both were validated against an adversarial corpus before this was settled; see [ADR 0001](docs/decisions/0001-sql-parser-selection.md).
+
+The binary requirement is met by **NativeAOT**, with two honest costs. First, libpg_query is a native library, so an AOT publish is the executable *plus* `libpg_query.so` — two files, not one. A true single file is available via self-contained single-file publish at roughly 44 MB and a slower start; pick per release, but do not pretend the AOT output is one file. Second, NativeAOT does not cross-compile across operating systems, so releases need a build container per target OS rather than a single cross-compiling agent.
+
+**The trimmer is a security surface here, not just a size optimisation.** Reflection over an AST silently returns nothing once types are trimmed, which turns the statement guard into a fail-open gate that still passes every JIT test. Walk parse trees with the parser's own visitor, never with `GetProperties`, and run the adversarial suite against the **published AOT binary** — a JIT-only test run does not tell you what shipped. See ADR 0001, which found exactly this.
+
+Go was considered and is the credible alternative: it produces one genuinely static file with no native dependency. It was rejected because its T-SQL story is materially weaker — a young third-party parser against Microsoft's first-party one — and because the team's fluency is here. If a future constraint genuinely breaks .NET, raise it explicitly, do not drift.
 
 ## Why this exists
 
@@ -131,7 +137,7 @@ Append-only structured log: caller identity, source, statement (redacted per pol
 
 ### 7. Boring, single-binary operations
 
-One static Go binary. One config file. `rtfq serve --config rtfq.yaml`. No database of our own, no message broker, no Kubernetes requirement. Docker image is a convenience, not the deployment model.
+One NativeAOT binary — no .NET runtime to install on the box. One config file. `rtfq serve --config rtfq.yaml`. No database of our own, no message broker, no Kubernetes requirement. Docker image is a convenience, not the deployment model.
 
 ## Wire protocol — settled
 

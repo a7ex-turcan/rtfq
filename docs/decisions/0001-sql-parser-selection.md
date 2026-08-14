@@ -2,157 +2,175 @@
 
 - **Status:** Accepted
 - **Date:** 2026-08-14
-- **Decides:** the open question "Parser per dialect (cgo trade-off)" from [`docs/PHASES.md`](../PHASES.md), which gates M3
-- **Supersedes:** the assumption in [`CLAUDE.md`](../../CLAUDE.md) that using PostgreSQL's real parser means accepting cgo
+- **Decides:** the open question "Parser per dialect" from [`docs/PHASES.md`](../PHASES.md), which gates M3
+- **Note:** an earlier revision of this ADR decided the same question for Go, before the language was settled as
+  .NET. It is in git history. Everything below was re-run on .NET; nothing is carried over on trust.
 
 ---
 
 ## Context
 
-`CLAUDE.md` requires per-dialect parsing with a real parser, never regex, and simultaneously requires a single
-static binary. Those two requirements appeared to conflict: the most faithful PostgreSQL parser available to Go
-is `pganalyze/pg_query_go`, which wraps PostgreSQL's own C parser through **cgo** — which in turn means a C
-toolchain, harder cross-compilation, and per-platform build runners. SQL Server looked worse: no parser of
-comparable quality was known, and regex is forbidden by the working agreements.
+`CLAUDE.md` requires per-dialect parsing with a real parser, never regex, and a single self-hosted binary with no
+runtime to install. The parser question was the largest technical risk in the project, because a wrong answer is
+not slow or ugly — it is a **statement guard that can be talked past**, which is the one failure this product
+cannot absorb.
 
-This spike ran an adversarial corpus of **35 PostgreSQL** and **19 T-SQL** statements through candidate parsers,
-written the way the real guard would be written, plus a fail-closed probe and a build matrix.
+This spike ran an adversarial corpus of **35 PostgreSQL** and **20 T-SQL** statements through candidate parsers,
+with the classifier written the way the real guard will be written, plus fail-closed probes and a publish matrix.
 
 ## Decision
 
-| Dialect | Library | cgo? |
+| Dialect | Library | Kind |
 |---|---|---|
-| PostgreSQL | [`github.com/wasilibs/go-pgquery`](https://github.com/wasilibs/go-pgquery) — libpg_query compiled to WebAssembly, run on wazero | **No** |
-| SQL Server | [`github.com/sqlc-dev/teesql`](https://github.com/sqlc-dev/teesql) — pure Go, AST mirrors Microsoft's ScriptDom | **No** |
+| SQL Server | [`Microsoft.SqlServer.TransactSql.ScriptDom`](https://www.nuget.org/packages/Microsoft.SqlServer.TransactSql.ScriptDom) 180.78.1 (`TSql180Parser`) | First-party Microsoft, pure managed |
+| PostgreSQL | [`Npgquery`](https://www.nuget.org/packages/Npgquery) 1.1.0 — libpg_query via P/Invoke | PostgreSQL's own parser, native |
 
-**The conflict dissolves.** `go-pgquery` is PostgreSQL's *actual* parser — the same libpg_query C code — compiled
-to wasm and executed by a pure-Go runtime. We get byte-for-byte upstream grammar fidelity with
-`CGO_ENABLED=0`, static binaries, and free cross-compilation. It exposes the same API as `pg_query_go` and returns
-`pganalyze` types, so the escape hatch is a build tag (`-tags pgquery_cgo`) rather than a rewrite.
+Both are the *real* grammar for their dialect: ScriptDom is the parser behind SSMS and SqlPackage, and libpg_query
+is PostgreSQL's own parser extracted as a library. Neither is a reimplementation we would have to trust.
 
 ## Evidence
 
-Versions tested: Go 1.26.6 · `go-pgquery` v0.0.0-20260728010200 · `pg_query_go` v6.2.2 (types) · wazero v1.12.0 ·
-`teesql` v1.1.0.
-
-**Correctness — the corpus is the point, and both cleared it:**
+Versions: .NET 10.0.303 · ScriptDom 180.78.1 · Npgquery 1.1.0 (libpg_query, PG 18 parse trees).
 
 | | PostgreSQL | SQL Server |
 |---|---|---|
-| Adversarial corpus | **35 / 35** | **19 / 19** |
+| Adversarial corpus (JIT) | **35 / 35** | **20 / 20** |
+| Adversarial corpus (NativeAOT binary) | **35 / 35** | **20 / 20** |
+| Fails closed on malformed input | Yes — parse error returned | Yes — `IList<ParseError>` returned |
+| Parse + classify latency | 56 µs simple, 128 µs complex | 27 µs simple, 24 µs complex |
+| Cold start | 10.8 ms JIT / **0.6 ms** AOT (native library load) | negligible |
 
-Cases that a naive guard fails and these did not: `WHERE 1=1` and `WHERE id = 1 OR true`; `;`-stacked statements;
-`DROP` hidden in a line or block comment; a semicolon inside a string literal; `DELETE` buried in a CTE under a
+Cases a naive guard fails and these did not: `WHERE 1=1` and `WHERE id = 1 OR true`; `;`-stacked statements;
+`DROP` hidden in a line or block comment; a semicolon inside a string literal; `DELETE` buried in a CTE beneath a
 top-level `SELECT`; `SELECT INTO`; `COPY ... FROM PROGRAM`; `DO $$ ... $$`; `EXPLAIN ANALYZE`; `GRANT`; `SET ROLE`;
 bracket-quoted and three-part T-SQL names; a T-SQL batch with **no separator at all** (`SELECT 1 DROP TABLE orders`);
-`EXEC`, `sp_executesql`, `xp_cmdshell`; and a Cyrillic homoglyph table name that must *not* match an `orders`
-allow-list entry.
+`EXEC`, `sp_executesql`, `xp_cmdshell`; `INSERT ... EXEC`; and a Cyrillic homoglyph table name that must *not*
+match an `orders` allow-list entry.
 
-**Build and cost:**
+**Deployment shapes**, both verified to pass the full corpus on the published artifact:
 
-| Property | Result |
-|---|---|
-| `CGO_ENABLED=0` cross-compile | **5 / 5** targets: linux/amd64, linux/arm64, darwin/arm64, darwin/amd64, windows/amd64 |
-| Binary size | baseline 2.3 MB → +14 MB (go-pgquery incl. wasm) → +5.6 MB (teesql). Combined ≈ 20 MB |
-| Parse latency, Postgres | 16 µs simple, 26 µs complex |
-| Parse latency, T-SQL | 79 µs simple, 160 µs complex |
-| **Cold start** | **~895 ms on the first parse** — wazero compiling the wasm module |
+| Shape | Files | Size | Cold start |
+|---|---|---|---|
+| NativeAOT | **2** — executable + `libpg_query.so` | ~18 MB | 0.6 ms |
+| Self-contained single-file | **1** | 44 MB | 15.5 ms |
 
-Latency is irrelevant next to a database round-trip. The ~20 MB binary is a fair price for a correct guard.
+`Npgquery` ships native binaries for `linux-x64`, `linux-arm64`, `osx-arm64`, `win-x64`, `win-arm64`.
+**`osx-x64` (Intel Mac) is missing** — a gap to note in M5, not a blocker in 2026.
 
-⚠ **The cold start is an operational requirement, not a curiosity:** the server must parse a throwaway statement
-during startup so the first real request does not pay ~0.9 s. Investigate wazero's compilation cache in M0.
+## The finding that matters most
 
-## What this changes in the design
+> **A reflection-based AST walk is a fail-open security hole under NativeAOT, and every JIT test still passes.**
 
-The spike surfaced three things that alter the guard's shape. These are findings, not preferences.
+The first version of the T-SQL classifier walked the tree with `node.GetType().GetProperties(...)`. Under the JIT
+it scored 20/20. Published with NativeAOT, the *same code on the same corpus* scored **3/20** — and every failure
+was in the unsafe direction:
+
+```
+  drop-table    want=Reject  got=Read      truncate      want=Reject  got=Read
+  xp-cmdshell   want=Reject  got=Read      insert-exec   want=Reject  got=Read
+  unqualified-delete  want=Reject  got=Read
+```
+
+The trimmer had removed property metadata for types nothing statically referenced, so the walk returned zero
+nodes, so the guard found no statements, so everything looked like a harmless read. **A build-configuration flag
+silently converted the statement guard into an open door.** A second instance of the same class of bug: selecting
+the parser via `Assembly.GetExportedTypes()` worked under the JIT and threw
+`InvalidOperationException: Sequence contains no elements` under AOT.
+
+Both are fixed by not using reflection — ScriptDom's own `TSqlFragmentVisitor`, and naming `TSql180Parser`
+directly — after which the AOT binary scores 20/20 and 35/35. Three rules follow, and they are not style
+preferences:
+
+1. **Walk parse trees with the parser's visitor. Never with `GetProperties`.**
+2. **The adversarial suite must run against the published AOT binary**, in CI. A JIT-only run does not test what
+   ships. This is an M0 requirement, not an M5 one, because it constrains how everything above is written.
+3. **Treat trim/AOT warnings as build errors** (`TreatWarningsAsErrors`, `IsAotCompatible`). Every warning in this
+   spike pointed at real breakage.
+
+## What else this changes in the design
 
 ### 1. The guard must ALLOW-LIST statement types, not deny-list DDL
 
-`CLAUDE.md` principle 2 says *"classify as read / DML / DDL. DDL is rejected always."* That framing is a
-deny-list, and a deny-list **misses**:
+`CLAUDE.md` principle 2 says *"classify as read / DML / DDL. DDL is rejected always."* That framing is a deny-list,
+and a deny-list **misses**:
 
 | Statement | Is it DDL? | What it does |
 |---|---|---|
-| `COPY orders FROM PROGRAM 'curl ...'` | No | Executes shell commands as the database OS user |
+| `COPY orders FROM PROGRAM 'curl ...'` | No | Shell execution as the database OS user |
 | `COPY (SELECT ...) TO PROGRAM 'curl -d @-'` | No | Exfiltrates the table |
-| `DO $$ BEGIN DELETE FROM orders; END $$` | No | Runs arbitrary PL/pgSQL; the `DELETE` is invisible to classification |
+| `DO $$ BEGIN DELETE FROM orders; END $$` | No | Arbitrary PL/pgSQL; the `DELETE` is invisible to classification |
 | `EXPLAIN ANALYZE DELETE FROM orders` | No | **Actually executes** the statement |
 | `GRANT ALL ON orders TO PUBLIC` | No (DCL) | Privilege escalation |
-| `SET ROLE postgres` | No | Re-points every subsequent gate at another identity |
+| `SET ROLE postgres` | No | Re-points every later gate at another identity |
 | `EXEC xp_cmdshell 'dir'` | No | Command execution, T-SQL flavour |
 
-The guard therefore executes exactly `SelectStmt`, `InsertStmt`, `UpdateStmt`, `DeleteStmt`, `MergeStmt`, and
-`ExplainStmt` **without ANALYZE** — and refuses every other node type by default. New PostgreSQL releases add
-statement types; an allow-list fails closed against them, a deny-list fails open. Recommend amending
-`CLAUDE.md` principle 2 accordingly.
+The guard therefore executes exactly `SelectStmt`, `InsertStmt`, `UpdateStmt`, `DeleteStmt`, `MergeStmt` and
+`ExplainStmt` **without ANALYZE** (`SelectStatement`, `InsertStatement`, `UpdateStatement`, `DeleteStatement`,
+`MergeStatement` in T-SQL), and refuses every other node type. New engine releases add statement types; an
+allow-list fails closed against them, a deny-list fails open.
 
 ### 2. Statement-type checking cannot see inside function calls
 
-These classify as ordinary reads, and every gate passes them:
+These classify as ordinary reads and pass every gate:
 
 ```sql
 SELECT dblink_exec('host=evil', 'DELETE FROM orders');  -- writes to another host
 SELECT lo_export(1, '/tmp/x');                          -- writes a file
 SELECT pg_read_file('/etc/passwd');                     -- reads a file
-SELECT pg_sleep(10);                                    -- stalls a connection
 ```
 
-The spike confirmed function names **are** extractable from the parse tree (`FuncCall` → `funcname`), so a
-function-name gate is implementable. But it is a deny-list against an open set, which is exactly the shape we
-just rejected in finding 1 — an allow-list of functions is impractical for real analytical queries.
+Function names **are** extractable from the tree (`FuncCall` → `funcname`; verified), so a deny-list is
+implementable — but it is a deny-list against an open set, the shape rejected in finding 1.
 
-**Therefore: the scoped database `GRANT` is the real boundary, not the guard.** `CLAUDE.md` principle 5 already
+**Therefore the scoped database `GRANT` is the real boundary, not the guard.** `CLAUDE.md` principle 5 already
 says our guards are defence in depth and not a substitute for a correct `GRANT`; this spike upgrades that from
-good advice to a **load-bearing requirement**, and the security posture document (M5) must say so plainly. A
+good advice to a **load-bearing requirement**, and the M5 security posture document must say so plainly. A
 function deny-list covering the known-dangerous set is still worth having as a second layer.
 
 ### 3. Two smaller mechanics, both confirmed implementable
 
-- **`INSERT ... EXEC` (T-SQL)** surfaces only as `InsertStatement`, so a stored procedure would run behind an
-  allow-listed INSERT. The tree does expose `InsertSource`, so the guard permits only `ValuesInsertSource` and
-  `SelectInsertSource` and refuses `ExecuteInsertSource`.
-- **Unqualified names resolve at execution time** — through `search_path` in PostgreSQL, the default schema in
-  SQL Server. An allow-list entry checked against a name the *server* resolves differently is a gate bypass, so
-  the server must **pin `search_path` on every connection** (and the default schema for T-SQL), or require
-  schema-qualified names outright. Note that `"Orders"` and `orders` are genuinely different tables: the
-  allow-list comparison must never case-fold.
+- **`INSERT ... EXEC` (T-SQL)** runs a stored procedure but surfaces only as `InsertStatement`. The tree exposes
+  `InsertSpecification.InsertSource`, so permit `ValuesInsertSource` and `SelectInsertSource`, refuse
+  `ExecuteInsertSource`. Verified.
+- **Unqualified names resolve at execution time** — via `search_path` in PostgreSQL, the default schema in SQL
+  Server. An allow-list entry checked against a name the *server* resolves differently is a bypass, so pin
+  `search_path` (and the default schema) on every connection, or require schema-qualified names. Note `"Orders"`
+  and `orders` are genuinely different tables: the comparison must never case-fold.
 
 ## Residual risks
 
-- ⚠ **`teesql` is young.** v1.1.0, published July 2026, no public importers yet. Its AST mirrors ScriptDom, which
-  is a strong provenance signal, and it cleared 19/19 — but it is the least-proven dependency in the project.
-  **Mitigation:** pin and vendor it; keep the T-SQL corpus as a regression suite that runs against every bump;
-  and keep the guard's allow-list posture so an unmodelled construct fails closed. If it is abandoned, the
-  fallback is an ANTLR-generated grammar from `grammars-v4` (pure Go, heavier) — worse, but not a dead end.
-- ⚠ **`teesql` is lenient: it returns no error for garbage.** `@@@ not sql`, `SELECT * FROM`, and an unterminated
-  literal all parse without error. It does **not** silently drop input — every probe accounted for the full input
-  span and surfaced the dangerous statements (`@@@ DROP TABLE orders` yields `LabelStatement` **and**
-  `DropTableStatement`) — so the allow-list plus the multi-statement check contains it. **The guard must not rely
-  on the parser for syntax validation**, and should assert that parsed statement fragments span the entire input.
-- ⚠ **`go-pgquery` is pre-v1** (no tagged release). It is a thin wrapper over versioned libpg_query, and
-  `-tags pgquery_cgo` swaps in the official cgo library using identical code, so the exposure is packaging, not
-  grammar.
-- ⚠ **wasm is ~4–5× slower than cgo** per the upstream benchmarks. At 16–26 µs per parse this is noise; it would
-  only matter if RTFQ ever parsed at high volume, which it does not.
+- ⚠ **`Npgquery` is young** — version 1.1.0, two releases. It is a thin P/Invoke shim over versioned libpg_query,
+  so the exposure is packaging rather than grammar, and the wrapper is small enough to replace or vendor if it is
+  abandoned. Alternatives exist (`PgsqlParser`, or our own P/Invoke), and libpg_query itself is the stable part.
+  **Mitigation:** pin the version, keep the corpus as a regression suite on every bump.
+- ⚠ **A native dependency contradicts "single binary" if read literally.** AOT ships two files. Decide the
+  release shape in M5 with the numbers above; do not discover it late.
+- ⚠ **`osx-x64` is unsupported** by Npgquery's native payload.
+- ⚠ **NativeAOT does not cross-compile across operating systems.** Mitigated by building each target in its own
+  container — verified here by producing and running the linux-x64 AOT binary from a Windows host.
+- ⚠ **A `-- just a comment` or empty input parses without error** in both engines, yielding zero statements. The
+  guard rejects on "no statement" rather than trusting the parser to error.
 
 ## Consequences
 
 - M2's parser spike is **closed**; M3 is unblocked.
-- M5's release pipeline is **simple**: `CGO_ENABLED=0` everywhere, no C toolchain, no per-platform runners, and
-  goreleaser stays boring. This was the outcome most at risk.
-- No C compiler is needed for development either — relevant, since the dev machine has none.
-- The M3 adversarial suite has its seed: the corpus in `spike/parser/corpus/` graduates to `internal/guard/testdata`.
+- M0 gains a requirement: **CI publishes the AOT binary and runs the guard suite against it.**
+- The corpus in `spike/parser/Corpus.cs` is the seed of M3's adversarial suite.
 
 ## Reproduction
 
 The spike lives in [`spike/parser/`](../../spike/parser) — throwaway code, not part of the build, kept as evidence.
 
 ```bash
-docker run --rm -v "$PWD/spike/parser:/work" -w /work golang:1-bookworm bash -c '
-  CGO_ENABLED=0 go run ./cmd/pg &&        # PostgreSQL corpus      (35 cases)
-  CGO_ENABLED=0 go run ./cmd/tsql &&      # SQL Server corpus      (19 cases)
-  CGO_ENABLED=0 go run ./cmd/robust &&    # fail-closed probe
-  CGO_ENABLED=0 go run ./cmd/failopen &&  # input-coverage probe
-  CGO_ENABLED=0 go run ./cmd/holes'       # function / InsertSource gaps
+cd spike/parser
+dotnet run -- pg        # PostgreSQL corpus, 35 cases
+dotnet run -- tsql      # SQL Server corpus, 20 cases
+dotnet run -- anomaly   # why libpg_query accepts "SELECT 1 @@@@ DELETE FROM orders"
+dotnet run -- probe     # Npgquery's real API surface
+
+# The one that matters: the AOT binary, not the JIT build.
+docker run --rm -v "$PWD:/src" -w /src mcr.microsoft.com/dotnet/sdk:10.0 bash -c '
+  apt-get update -qq && apt-get install -y -qq clang zlib1g-dev &&
+  dotnet publish -c Release -r linux-x64 /p:PublishAot=true -o /out &&
+  /out/spike pg && /out/spike tsql'
 ```
