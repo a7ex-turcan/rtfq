@@ -1,0 +1,167 @@
+name: release
+
+# Tagging is the trigger, and the tag is the version. Nothing here reads a
+# version out of a file, so a release can never claim a number the tag did not.
+on:
+  push:
+    tags: ['v*']
+
+permissions:
+  contents: write
+
+env:
+  DOTNET_NOLOGO: true
+  DOTNET_CLI_TELEMETRY_OPTOUT: true
+
+jobs:
+  # A tag usually points at a commit CI already passed, but "usually" is not a
+  # guarantee, and an artifact people download deserves one. This runs the full
+  # suite, integration tests included, before anything is built for publication.
+  verify:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-dotnet@v4
+        with:
+          global-json-file: global.json
+
+      - name: Build
+        run: dotnet build -c Release
+
+      - name: Test
+        run: dotnet test --no-build -c Release
+
+  build:
+    needs: verify
+    strategy:
+      # One platform failing should not hide whether the others would have built.
+      fail-fast: false
+      matrix:
+        include:
+          - { os: ubuntu-latest,    rid: linux-x64,   archive: tar }
+          - { os: ubuntu-24.04-arm, rid: linux-arm64, archive: tar }
+          - { os: windows-latest,   rid: win-x64,     archive: zip }
+          - { os: macos-latest,     rid: osx-arm64,   archive: tar }
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-dotnet@v4
+        with:
+          global-json-file: global.json
+
+      - name: Resolve version from the tag
+        shell: bash
+        run: echo "VERSION=${GITHUB_REF_NAME#v}" >> "$GITHUB_ENV"
+
+      - name: Install NativeAOT prerequisites
+        if: runner.os == 'Linux'
+        run: sudo apt-get update && sudo apt-get install -y clang zlib1g-dev
+
+      # NativeAOT does not cross-compile across operating systems, which is why
+      # this is a matrix over runners rather than a matrix over RIDs on one box.
+      - name: Publish
+        shell: bash
+        run: dotnet publish src/Rtfq.Cli -c Release -r ${{ matrix.rid }} -p:Version="$VERSION" -o publish
+
+      - name: Verify the binary reports the tagged version
+        shell: bash
+        run: |
+          binary=publish/rtfq
+          [ "${{ runner.os }}" = "Windows" ] && binary=publish/rtfq.exe
+          reported=$("$binary" --version | awk '{print $2}')
+          echo "tag=$VERSION binary=$reported"
+          if [ "$reported" != "$VERSION" ]; then
+            echo "::error::binary reports '$reported' but the tag says '$VERSION'"
+            exit 1
+          fi
+
+      # "Bundled per platform": the binary plus the things someone needs on the
+      # box with it. A bare executable makes the reader go back to GitHub for a
+      # sample config.
+      - name: Stage the bundle
+        shell: bash
+        run: |
+          name="rtfq-$VERSION-${{ matrix.rid }}"
+          echo "BUNDLE=$name" >> "$GITHUB_ENV"
+          mkdir -p "stage/$name/examples"
+          if [ "${{ runner.os }}" = "Windows" ]; then
+            cp publish/rtfq.exe "stage/$name/"
+          else
+            cp publish/rtfq "stage/$name/"
+            chmod +x "stage/$name/rtfq"
+          fi
+          cp README.md LICENSE CHANGELOG.md "stage/$name/"
+          cp examples/rtfq.dev.yaml "stage/$name/examples/"
+
+      - name: Archive (tar.gz)
+        if: matrix.archive == 'tar'
+        shell: bash
+        run: tar -czf "$BUNDLE.tar.gz" -C stage "$BUNDLE"
+
+      - name: Archive (zip)
+        if: matrix.archive == 'zip'
+        shell: pwsh
+        run: Compress-Archive -Path "stage/$env:BUNDLE" -DestinationPath "$env:BUNDLE.zip"
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: ${{ matrix.rid }}
+          path: |
+            *.tar.gz
+            *.zip
+          if-no-files-found: error
+
+  release:
+    needs: build
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/download-artifact@v4
+        with:
+          path: artifacts
+          merge-multiple: true
+
+      - name: Resolve version from the tag
+        run: echo "VERSION=${GITHUB_REF_NAME#v}" >> "$GITHUB_ENV"
+
+      # Computed here rather than per-platform so every checksum comes from one
+      # tool, and the file covers the exact bytes being published.
+      - name: Checksums
+        working-directory: artifacts
+        run: |
+          sha256sum * > SHA256SUMS
+          cat SHA256SUMS
+
+      # The changelog is the release notes. Keeping one source avoids the usual
+      # drift where the tag says one thing and CHANGELOG.md says another.
+      - name: Extract release notes for this version
+        run: |
+          # String comparison, not a dynamic regex: the version contains dots and
+          # the heading contains brackets, and an escaping mistake there fails by
+          # producing an EMPTY file rather than an error. Hence the guard below.
+          awk -v ver="$VERSION" '
+            BEGIN { head = "## [" ver "]" }
+            substr($0, 1, length(head)) == head    { capture = 1; next }
+            capture && substr($0, 1, 4) == "## ["  { exit }
+            capture                                { print }
+          ' CHANGELOG.md > notes.md
+
+          if [ ! -s notes.md ]; then
+            echo "::error::CHANGELOG.md has no section for [$VERSION]"
+            exit 1
+          fi
+          cat notes.md
+
+      - name: Publish the release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          prerelease=""
+          case "$VERSION" in *-*) prerelease="--prerelease" ;; esac
+
+          gh release create "$GITHUB_REF_NAME" \
+            --title "rtfq $VERSION" \
+            --notes-file notes.md \
+            $prerelease \
+            artifacts/*

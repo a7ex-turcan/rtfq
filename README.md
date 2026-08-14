@@ -17,6 +17,27 @@ production connection string, standing up one MCP server per database, or buying
 RTFQ is the option for the eight-person team: one binary that holds the config, the credentials, the policy, and
 the audit log, and exposes a port that agents and humans both talk to.
 
+## Install
+
+Grab a bundle from [Releases](https://github.com/a7ex-turcan/rtfq/releases). Each one contains a single
+self-contained binary — no .NET runtime to install — plus this README, the licence, the changelog, and a sample
+config.
+
+| Platform | Artifact |
+|---|---|
+| Linux x64 | `rtfq-<version>-linux-x64.tar.gz` |
+| Linux arm64 | `rtfq-<version>-linux-arm64.tar.gz` |
+| Windows x64 | `rtfq-<version>-win-x64.zip` |
+| macOS Apple Silicon | `rtfq-<version>-osx-arm64.tar.gz` |
+
+```bash
+tar -xzf rtfq-0.1.0-linux-x64.tar.gz && cd rtfq-0.1.0-linux-x64
+./rtfq --version
+```
+
+Verify against `SHA256SUMS`, published with each release. Intel Macs and Windows on ARM are not built — see
+[CHANGELOG.md](CHANGELOG.md) for why that is a decision rather than an oversight.
+
 ## Try it
 
 ```bash
@@ -87,6 +108,22 @@ warnings are build errors here, and CI runs the suite against the published arti
 | [docs/PHASES.md](docs/PHASES.md) | M0–M5, with exit criteria and the open decisions each phase depends on |
 | [ADR 0001](docs/decisions/0001-sql-parser-selection.md) | Per-dialect parsers, and why the guard is an allow-list |
 | [ADR 0002](docs/decisions/0002-ddl-additive-and-corrective.md) | Which schema changes an agent may make, and which it may never |
+| [CHANGELOG.md](CHANGELOG.md) | What changed in each release, and what each one still cannot do |
+
+## Releasing
+
+Tags drive releases; nothing reads a version out of a file, so a build can never claim a number its tag did not.
+
+```bash
+# 1. move the Unreleased section of CHANGELOG.md under a new [x.y.z] heading
+# 2. tag and push
+git tag -a v0.1.1 -m 'rtfq 0.1.1' && git push origin v0.1.1
+```
+
+The release workflow runs the full suite (integration tests included), publishes a NativeAOT binary per platform,
+asserts each binary reports the tagged version, bundles it, and creates the GitHub release using that version's
+changelog section as the notes. A tag with no matching changelog section fails the release rather than shipping
+empty notes.
 
 ## Licence
 

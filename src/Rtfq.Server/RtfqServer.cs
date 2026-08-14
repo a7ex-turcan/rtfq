@@ -26,8 +26,6 @@ namespace Rtfq.Server;
 /// </summary>
 public sealed class RtfqServer : IAsyncDisposable
 {
-    public const string Version = "0.1.0-m0";
-
     readonly WebApplication _app;
     readonly SourceRegistry _sources;
     readonly AuditLog _audit;
@@ -117,7 +115,7 @@ public sealed class RtfqServer : IAsyncDisposable
         app.MapGet("/health", async ctx =>
         {
             await WriteJson(ctx, StatusCodes.Status200OK,
-                new HealthResponse("ok", Version), RtfqJson.Default.HealthResponse).ConfigureAwait(false);
+                new HealthResponse("ok", RtfqVersion.Current), RtfqJson.Default.HealthResponse).ConfigureAwait(false);
         });
 
         app.MapGet("/v1/sources", async ctx =>

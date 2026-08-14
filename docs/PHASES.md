@@ -331,7 +331,10 @@ pointing this at production.
 
 ### Scope
 
-1. **Release pipeline** — NativeAOT builds per RID. Two constraints from
+1. ~~**Release pipeline**~~ — **landed early, at M0.** Tag-driven, one NativeAOT build per platform, each bundle
+   carrying the binary plus README, licence, changelog and a sample config; release notes come from the changelog
+   section for that version. What remains for M5 is the Docker image and reproducibility, not the mechanics.
+   Original notes, still accurate: NativeAOT builds per RID, with two constraints from
    [ADR 0001](decisions/0001-sql-parser-selection.md): AOT does **not** cross-compile across operating systems, so
    each target OS needs its own build container or agent; and `Npgquery` ships no `osx-x64` native payload, so
    Intel Macs are unsupported unless we build libpg_query ourselves.

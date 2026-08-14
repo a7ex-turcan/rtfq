@@ -1,6 +1,20 @@
 <Project>
 
   <PropertyGroup>
+    <!--
+      The single source of truth for the version. Local and CI builds carry the
+      "dev" suffix so a binary from a working tree can never be mistaken for a
+      release; the release workflow overrides Version from the git tag, so the
+      number the CLI reports is exactly the tag that produced it.
+    -->
+    <VersionPrefix>0.1.0</VersionPrefix>
+    <VersionSuffix>dev</VersionSuffix>
+
+    <Authors>Alex Turcan</Authors>
+    <Product>RTFQ</Product>
+    <RepositoryUrl>https://github.com/a7ex-turcan/rtfq</RepositoryUrl>
+    <PackageLicenseExpression>MIT</PackageLicenseExpression>
+
     <TargetFramework>net10.0</TargetFramework>
     <LangVersion>latest</LangVersion>
     <Nullable>enable</Nullable>

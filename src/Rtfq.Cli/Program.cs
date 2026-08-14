@@ -16,7 +16,7 @@ internal static class Program
 
         if (args.Has("version"))
         {
-            Console.WriteLine($"rtfq {RtfqServer.Version}");
+            Console.WriteLine($"rtfq {RtfqVersion.Current}");
             return 0;
         }
 
@@ -63,7 +63,7 @@ internal static class Program
 
         await using var server = await RtfqServer.StartAsync(config, stateDir).ConfigureAwait(false);
 
-        Console.WriteLine($"rtfq {RtfqServer.Version} listening on {server.BaseAddress}");
+        Console.WriteLine($"rtfq {RtfqVersion.Current} listening on {server.BaseAddress}");
         Console.WriteLine($"  mode      {(production ? "production" : "development")}");
         Console.WriteLine($"  sources   {string.Join(", ", config.Sources.Select(s => $"{s.Name} ({s.Access.ToWire()})"))}");
         Console.WriteLine($"  audit     {Path.Combine(stateDir, "audit.jsonl")}");
@@ -234,7 +234,7 @@ internal static class Program
     static void PrintUsage()
     {
         Console.WriteLine($"""
-            rtfq {RtfqServer.Version} - governed, auditable access to your data sources
+            rtfq {RtfqVersion.Current} - governed, auditable access to your data sources
 
             USAGE
               rtfq serve     --config rtfq.yaml [--production] [--state-dir DIR]
