@@ -1,0 +1,13 @@
+<Solution>
+  <Folder Name="/src/">
+    <Project Path="src/Rtfq.Adapters/Rtfq.Adapters.csproj" />
+    <Project Path="src/Rtfq.Cli/Rtfq.Cli.csproj" />
+    <Project Path="src/Rtfq.Client/Rtfq.Client.csproj" />
+    <Project Path="src/Rtfq.Contracts/Rtfq.Contracts.csproj" />
+    <Project Path="src/Rtfq.Server/Rtfq.Server.csproj" />
+  </Folder>
+  <Folder Name="/tests/">
+    <Project Path="tests/Rtfq.Adapters.Tests/Rtfq.Adapters.Tests.csproj" />
+    <Project Path="tests/Rtfq.Server.Tests/Rtfq.Server.Tests.csproj" />
+  </Folder>
+</Solution>

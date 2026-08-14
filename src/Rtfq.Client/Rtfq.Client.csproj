@@ -1,0 +1,5 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <ItemGroup>
+    <ProjectReference Include="..\Rtfq.Contracts\Rtfq.Contracts.csproj" />
+  </ItemGroup>
+</Project>

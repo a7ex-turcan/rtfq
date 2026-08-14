@@ -1,0 +1,73 @@
+name: ci
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+env:
+  DOTNET_NOLOGO: true
+  DOTNET_CLI_TELEMETRY_OPTOUT: true
+
+jobs:
+  build-and-test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-dotnet@v4
+        with:
+          global-json-file: global.json
+
+      - name: Restore
+        run: dotnet restore
+
+      # Warnings are errors, including trim and AOT analysis. ADR 0001 found a
+      # guard that passed every JIT test and failed open once published, and every
+      # warning in that spike pointed at real breakage.
+      - name: Build
+        run: dotnet build --no-restore -c Release
+
+      - name: Unit tests
+        run: dotnet test tests/Rtfq.Server.Tests --no-build -c Release --verbosity normal
+
+      # Real containerised PostgreSQL. No mocks for adapters.
+      - name: Integration tests
+        run: dotnet test tests/Rtfq.Adapters.Tests --no-build -c Release --verbosity normal
+
+  # The build above proves the code compiles. This proves what actually ships.
+  # A JIT-only test run does not tell us how the published binary behaves.
+  aot-publish:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-dotnet@v4
+        with:
+          global-json-file: global.json
+
+      - name: Install NativeAOT prerequisites
+        run: sudo apt-get update && sudo apt-get install -y clang zlib1g-dev
+
+      - name: Publish NativeAOT
+        run: dotnet publish src/Rtfq.Cli -c Release -r linux-x64 -o out
+
+      - name: Smoke-test the published binary
+        run: |
+          ./out/rtfq --version
+          ./out/rtfq validate --config examples/rtfq.dev.yaml
+
+      # Production mode must reject the development sample: its secrets are inline
+      # and it has no TLS. If this ever exits 0, the rule has stopped working.
+      - name: Production mode refuses the development sample
+        run: |
+          if ./out/rtfq validate --config examples/rtfq.dev.yaml --production; then
+            echo "::error::production validation accepted a config with inline secrets and no TLS"
+            exit 1
+          fi
+          echo "refused as expected"
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: rtfq-linux-x64
+          path: out/rtfq

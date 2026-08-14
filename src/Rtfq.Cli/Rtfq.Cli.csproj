@@ -1,0 +1,17 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <PropertyGroup>
+    <OutputType>Exe</OutputType>
+    <AssemblyName>rtfq</AssemblyName>
+    <RootNamespace>Rtfq.Cli</RootNamespace>
+    <PublishAot>true</PublishAot>
+    <!-- Startup is user-facing: rtfq validate runs in a shell loop. -->
+    <TieredPGO>true</TieredPGO>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <ProjectReference Include="..\Rtfq.Server\Rtfq.Server.csproj" />
+    <ProjectReference Include="..\Rtfq.Client\Rtfq.Client.csproj" />
+  </ItemGroup>
+
+</Project>

@@ -1,0 +1,34 @@
+# Development sample: loopback, no TLS, secrets from the environment.
+#
+# This config is deliberately NOT production-safe, and `rtfq validate --production`
+# refuses it. CI asserts that refusal, so the rule cannot rot.
+#
+#   export RTFQ_TOKEN_AGENT=dev-token-please-change
+#   export ORDERS_DSN='Host=localhost;Port=5432;Database=orders;Username=rtfq'
+#   rtfq serve --config examples/rtfq.dev.yaml
+
+server:
+  # Loopback only, so TLS is not required. The moment this becomes 0.0.0.0,
+  # validation demands a certificate - that is a rule, not a knob.
+  listen: 127.0.0.1:7420
+
+  auth:
+    mode: token
+    tokens:
+      - id: agent-readonly
+        secret: ${env:RTFQ_TOKEN_AGENT}
+        grants:
+          orders: read
+
+defaults:
+  max_rows: 1000
+  statement_timeout: 15s
+
+sources:
+  - name: orders
+    kind: postgres
+    dsn: ${env:ORDERS_DSN}
+    description: Order lifecycle, fulfilment, returns
+    # Absent access: means read. Writes arrive in M3.
+    schemas: [public]
+    max_rows: 500
