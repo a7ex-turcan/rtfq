@@ -53,7 +53,7 @@ So writes exist, but they are never a single boolean. There are **two kinds of p
   1. The **source** is declared writable in config
   2. The **caller's token** is granted write on that source
   3. The **target** (table / collection / path) is on that source's write allow-list
-  4. The **statement** passes the mutation guard — bounded, qualified, non-DDL, under the affected-row cap
+  4. The **statement** passes the mutation guard — an allow-listed statement type, bounded, qualified, under the affected-row cap
 - **Human approval** stops *intent*. The four gates plus the row cap will happily let through `UPDATE orders SET vip = true WHERE customer_id = 42` — qualified, tiny, on an allow-listed table — even when a poisoned row of data is what suggested it. Nothing structural catches a small, in-bounds, semantically malicious write. **Only a human seeing the statement and the diff does.** So `require_approval` is not an optional nicety on high-value sources; it is *the* control that closes the prompt-injection story. Treat an auto-committing writable source as safe against catastrophe but not against malice, and document it that way.
 
 Copy-pasting a config from staging to prod should not be sufficient to hand an agent a loaded gun. Two of the four gates live in different places on purpose.
@@ -80,8 +80,11 @@ There is no global "write mode". There is no `--allow-writes` flag. Enabling wri
 
 Enforced in layers, all of which must hold:
 
-- **Statement parsing** — per-dialect real parser, never regex. Classify as read / DML / DDL. DDL is rejected always.
-- **Qualification required** — an `UPDATE` or `DELETE` with no `WHERE` (or a Mongo update with an empty filter) is rejected outright. No exceptions, no override.
+- **Statement parsing** — per-dialect real parser, never regex. Then an **allow-list of statement types**: we execute `SELECT`, `INSERT`, `UPDATE`, `DELETE`, `MERGE`, and `EXPLAIN` without `ANALYZE`. Every other node type is refused, by default, including ones that do not exist yet. **This is deliberately not a "reject DDL" rule, because a DDL deny-list fails open.** `COPY ... FROM PROGRAM` executes shell commands, `COPY ... TO PROGRAM` exfiltrates a table, `DO $$ ... $$` runs arbitrary PL/pgSQL whose `DELETE` is invisible to classification, `EXPLAIN ANALYZE` *actually executes* the statement it claims to explain, `GRANT` escalates privileges, `SET ROLE` re-points every later gate at another identity, and `EXEC xp_cmdshell` runs commands on the SQL Server host. **None of those are DDL and all of them are catastrophic.** An allow-list fails closed against the next one we have not thought of; a deny-list does not. Verified against both dialects in [ADR 0001](docs/decisions/0001-sql-parser-selection.md).
+  - **Walk the parse tree with the parser's own visitor, never by reflection.** Under NativeAOT a reflection-based walk returns nothing once types are trimmed, and the guard then classifies `DROP TABLE` as a harmless read while every JIT test still passes. This is not a style note; ADR 0001 hit it.
+  - **Classification is exhaustive, not top-level.** A `DELETE` inside a CTE sits under a `SELECT` at the root, and `INSERT ... EXEC` runs a stored procedure while presenting as an `INSERT` — check the insert *source*, not just the statement type.
+  - **Statement-type checking cannot see inside function calls.** `SELECT dblink_exec(...)` writes to another host, `lo_export` writes a file, `pg_read_file` reads one — all while classifying as plain reads. Keep a deny-list of known-dangerous functions as a second layer, but understand that this hole is closed by the database `GRANT`, not by us (see principle 5).
+- **Qualification required** — an `UPDATE` or `DELETE` with no `WHERE` (or a Mongo update with an empty filter) is rejected outright. No exceptions, no override. **A `WHERE`-presence test is not enough**: `WHERE 1=1`, `WHERE true`, and `WHERE id = 1 OR true` are all syntactically qualified and semantically unbounded, so this is predicate analysis on the parse tree, not a null check.
 - **Transactional two-phase execution is the mechanism, and it is also how we count.** The mutation runs inside a transaction that is *not* auto-committed. From that uncommitted execution we read the driver's **real affected-row count** — not an `EXPLAIN` estimate, which lies. If the real count exceeds `max_affected_rows` for the source, the transaction is rolled back and the call refused with the count. The server returns `{affected_rows, diff_sample, handle, requires_approval}`; a separate `commit` call finalises. Uncommitted handles expire and roll back.
   - **Caveat the agent must respect:** an uncommitted runaway mutation still *does the work* (locks, WAL, memory) before we roll it back. So `statement_timeout` is a first-class blast-radius guard, not a nicety, and a cheap pre-check *may* bail out an obviously-unbounded statement before the transaction is even opened. The transaction count is the source of truth for the cap; the pre-check is only an early-out. Which pre-check is worth it is per-engine (see Open questions).
 - **Before-images journaled** — affected rows are captured to the audit log before mutation. Not a true undo, but a recovery artifact a human can work from at 3am.
@@ -129,7 +132,7 @@ The agent is structurally forced to look before it leaps, and the human gets an 
 
 Config accepts `${env:PGPASSWORD}`, `${file:/run/secrets/pg}`, `${vault:...}`. A plaintext password in config is a startup **warning** in dev and a **hard fail** in production mode.
 
-Corollary: the credential a writable source connects with should be scoped by the DBA to exactly the tables it may touch. Our guards are defence in depth, not a substitute for a correct `GRANT`. We document this as required. PII protection is delegated here too (see Non-goals #4 and Open questions): the primary answer is a scoped grant, not column masking in policy.
+Corollary — and this is **load-bearing, not advice**: the credential a writable source connects with must be scoped by the DBA to exactly the tables it may touch. Our guards are defence in depth, not a substitute for a correct `GRANT`. [ADR 0001](docs/decisions/0001-sql-parser-selection.md) is why this got promoted: a statement can pass every gate we have and still write, exfiltrate, or read the filesystem through a function call — `SELECT dblink_exec('host=evil', 'DELETE FROM orders')` is a plain read to any statement classifier. We can deny-list the functions we know about; we cannot enumerate the ones we do not. **The scoped grant is the real boundary. The security posture document must say so plainly, and never imply our guards make an over-privileged credential safe.** PII protection is delegated here too (see Non-goals #4 and Open questions): the primary answer is a scoped grant, not column masking in policy.
 
 ### 6. Audit everything, locally
 
@@ -223,9 +226,10 @@ Deny beats allow. Default is deny. Absent `access:` means `read`.
    |   token grant  x  source access      |
    |   x target allow-list  = effective   |
    +--------------------------------------+
-   |  statement guard (per-dialect parse; |
-   |   classify read/DML/DDL; reject DDL  |
-   |   and unqualified mutations; inject  |
+   |  statement guard (per-dialect parse;  |
+   |   allow-list statement types, refuse  |
+   |   all others; reject unqualified and  |
+   |   trivially-true predicates; inject   |
    |   limits; optional unbounded pre-check)|
    +--------------------------------------+
    |  mutation broker (open txn, real     |
@@ -267,7 +271,7 @@ Everything above the adapter layer is source-agnostic. If the core needs to chan
 - **Question additions to the tool surface.** Every new MCP tool costs the consuming agent context on every call. Adding one needs an argument, not just a use case.
 - **Never weaken a gate.** If a task seems to require bypassing policy, the statement guard, the row cap, or the propose/commit split — stop and flag it. Do not add an override flag.
 - **Approval is the intent gate; never sell auto-commit as safe against malice.** The four structural gates stop blast radius, not a well-formed poisoned write. If a change would let a writable source commit without a human where a small malicious write matters, stop and flag it.
-- **DDL stays banned.** If a task appears to need schema change, it belongs in a migration, not in RTFQ.
+- **The statement guard is an allow-list. Never turn it into a deny-list.** Adding a statement type is a deliberate act with an argument behind it; the default answer for anything not on the list is no. If a task appears to need schema change, it belongs in a migration, not in RTFQ. And if you catch yourself writing "reject X" where X is a newly-discovered dangerous construct, stop — that is the deny-list creeping back, and the next construct will not be on your list.
 - **Adapters do not leak upward.** If the core needs changing to support one engine's quirk, the adapter interface is wrong. Say so.
 - **The affected-row count comes from the real (uncommitted) transaction, never from an estimate.** Do not "optimise" the cap into an `EXPLAIN`-based guess.
 - **Schema cache serves stale-flagged data when the source is down, never silently.** Offline discovery is a feature, hidden staleness is a bug.
