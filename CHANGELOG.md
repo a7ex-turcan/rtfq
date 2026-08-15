@@ -11,6 +11,10 @@ are called out under *Changed* rather than buried in *Fixed*.
 
 ## [Unreleased]
 
+Nothing yet. Next up is M2: SQL Server, MongoDB and HTTP adapters.
+
+## [0.2.0] - 2026-08-15
+
 **M1 — the MCP read surface and the schema cache.** The go/no-go milestone, and the verdict was GO:
 [ADR 0004](docs/decisions/0004-m1-go-no-go.md) records the evidence.
 
@@ -103,5 +107,6 @@ wire protocol, capped and audited. Thin, but nothing in it is a placeholder.
   osx-x64 native payload, so shipping the artifact now would mean withdrawing it later. See
   [ADR 0001](docs/decisions/0001-sql-parser-selection.md). No win-arm64 build either.
 
-[Unreleased]: https://github.com/a7ex-turcan/rtfq/compare/v0.1.0...HEAD
+[Unreleased]: https://github.com/a7ex-turcan/rtfq/compare/v0.2.0...HEAD
+[0.2.0]: https://github.com/a7ex-turcan/rtfq/releases/tag/v0.2.0
 [0.1.0]: https://github.com/a7ex-turcan/rtfq/releases/tag/v0.1.0

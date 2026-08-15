@@ -89,9 +89,15 @@ jobs:
           # is a native library, so the AOT output is the binary PLUS
           # libpg_query.so — shipping the binary alone would ship one that cannot
           # start. Debug symbols are the only thing excluded.
-          find publish -maxdepth 1 -type f \
-            ! -name '*.pdb' ! -name '*.dbg' ! -name '*.dwarf' \
-            -exec cp {} "stage/$name/" \;
+          #
+          # Plain globbing rather than find: on the Windows runner, find.exe is a
+          # different program entirely and whether Git's version wins depends on
+          # PATH order.
+          for f in publish/*; do
+            [ -f "$f" ] || continue
+            case "$f" in *.pdb|*.dbg|*.dwarf) continue ;; esac
+            cp "$f" "stage/$name/"
+          done
 
           [ "${{ runner.os }}" = "Windows" ] || chmod +x "stage/$name/rtfq"
           cp README.md LICENSE CHANGELOG.md "stage/$name/"
