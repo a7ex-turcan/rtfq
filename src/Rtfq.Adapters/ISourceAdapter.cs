@@ -26,10 +26,6 @@ public sealed record ReadOptions(int MaxRows, TimeSpan StatementTimeout);
 
 public sealed record ReadResult(List<ColumnInfo> Columns, JsonArray Rows, int RowCount, bool Truncated);
 
-public sealed record TableInfo(string Schema, string Name, string Kind);
-
-public sealed record SchemaSnapshot(List<TableInfo> Tables, DateTimeOffset CapturedAt);
-
 /// <summary>
 /// Raised for anything the caller or operator needs to distinguish. Carries an
 /// <see cref="ErrorCodes"/> value so the server can answer without knowing which
@@ -65,4 +61,10 @@ public interface ISourceAdapter : IAsyncDisposable
     Task<ReadResult> SampleAsync(string table, int rows, CancellationToken cancellationToken);
 
     Task<ReadResult> ExecuteReadAsync(string statement, ReadOptions options, CancellationToken cancellationToken);
+
+    /// <summary>
+    /// The plan, without executing. The adapter builds the EXPLAIN itself rather
+    /// than accepting one, so no caller can reach ANALYZE.
+    /// </summary>
+    Task<string> ExplainAsync(string statement, TimeSpan timeout, CancellationToken cancellationToken);
 }

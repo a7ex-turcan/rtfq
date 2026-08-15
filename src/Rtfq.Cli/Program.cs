@@ -1,6 +1,7 @@
 using System.Text.Json.Nodes;
 using Rtfq.Contracts;
 using Rtfq.Client;
+using Rtfq.Mcp;
 using Rtfq.Server;
 using Rtfq.Server.Configuration;
 
@@ -34,6 +35,10 @@ internal static class Program
                 "validate" => Validate(args),
                 "query" => await QueryAsync(args).ConfigureAwait(false),
                 "sources" => await SourcesAsync(args).ConfigureAwait(false),
+                "describe" => await DescribeAsync(args).ConfigureAwait(false),
+                "refresh" => await RefreshAsync(args).ConfigureAwait(false),
+                "explain" => await ExplainAsync(args).ConfigureAwait(false),
+                "mcp" => await McpAsync(args).ConfigureAwait(false),
                 _ => Fail($"unknown command '{args.Command}'"),
             };
         }
@@ -165,6 +170,84 @@ internal static class Program
         return 0;
     }
 
+    // --- discovery -------------------------------------------------------------
+
+    static async Task<int> DescribeAsync(Args args)
+    {
+        var source = args.Value("source");
+        if (string.IsNullOrEmpty(source)) return Fail("--source is required");
+
+        using var client = BuildClient(args, out var error);
+        if (client is null) return Fail(error!);
+
+        var table = args.Value("table") ?? args.Positional.FirstOrDefault();
+        var pattern = args.Value("pattern");
+        var limit = args.Value("limit");
+        if (Leftovers(args)) return 2;
+
+        if (table is not null)
+        {
+            Console.WriteLine(Render.Table(await client.DescribeTableAsync(source, table).ConfigureAwait(false)));
+            return 0;
+        }
+
+        int? parsedLimit = int.TryParse(limit, out var l) ? l : null;
+        Console.WriteLine(Render.Source(await client.DescribeSourceAsync(source, pattern, parsedLimit).ConfigureAwait(false)));
+        return 0;
+    }
+
+    static async Task<int> RefreshAsync(Args args)
+    {
+        var source = args.Value("source") ?? args.Positional.FirstOrDefault();
+        if (string.IsNullOrEmpty(source)) return Fail("a source is required: rtfq refresh <source>");
+
+        using var client = BuildClient(args, out var error);
+        if (client is null) return Fail(error!);
+        if (Leftovers(args)) return 2;
+
+        var result = await client.RefreshAsync(source).ConfigureAwait(false);
+        Console.WriteLine($"{result.Source}: re-read {result.TableCount} table(s)");
+        return 0;
+    }
+
+    static async Task<int> ExplainAsync(Args args)
+    {
+        var source = args.Value("source");
+        if (string.IsNullOrEmpty(source)) return Fail("--source is required");
+
+        using var client = BuildClient(args, out var error);
+        if (client is null) return Fail(error!);
+
+        var statement = string.Join(' ', args.Positional).Trim();
+        if (statement.Length == 0) return Fail("a statement is required");
+        if (Leftovers(args)) return 2;
+
+        var result = await client.ExplainAsync(source, statement).ConfigureAwait(false);
+        Console.WriteLine(result.Plan);
+        return 0;
+    }
+
+    /// <summary>
+    /// Speaks MCP on stdio. stdout is the protocol channel from here on, so
+    /// nothing may print to it but protocol messages — hence the banner on stderr.
+    /// </summary>
+    static async Task<int> McpAsync(Args args)
+    {
+        using var client = BuildClient(args, out var error);
+        if (client is null) return Fail(error!);
+        if (Leftovers(args)) return 2;
+
+        Console.Error.WriteLine($"rtfq {RtfqVersion.Current} mcp server on stdio");
+
+        var server = new McpServer(client, Console.In, Console.Out);
+        using var stopping = new CancellationTokenSource();
+        Console.CancelKeyPress += (_, e) => { e.Cancel = true; stopping.Cancel(); };
+
+        try { await server.RunAsync(stopping.Token).ConfigureAwait(false); }
+        catch (OperationCanceledException) { /* shutting down */ }
+        return 0;
+    }
+
     static RtfqClient? BuildClient(Args args, out string? error)
     {
         error = null;
@@ -239,19 +322,24 @@ internal static class Program
             USAGE
               rtfq serve     --config rtfq.yaml [--production] [--state-dir DIR]
               rtfq validate  --config rtfq.yaml [--production]
-              rtfq sources   [--server URL] [--token TOKEN]
+              rtfq sources
+              rtfq describe  --source NAME [--table public.orders] [--pattern TEXT] [--limit N]
+              rtfq refresh   NAME
               rtfq query     --source NAME "SELECT ..." [--max-rows N]
+              rtfq explain   --source NAME "SELECT ..."
+              rtfq mcp
 
             OPTIONS
               --config PATH             config file (default: rtfq.yaml)
               --production              treat inline secrets and missing TLS as errors, not warnings
-              --state-dir DIR           where the audit log lives (default: platform state dir)
+              --state-dir DIR           where the audit log and schema cache live
               --server URL              server address (env: RTFQ_SERVER)
               --token TOKEN             bearer token (env: RTFQ_TOKEN)
               --max-rows N              lower the row cap for one query; it can never raise it
               --insecure-skip-verify    accept self-signed server certificates (development only)
 
-            Reads are capped and every request is audited locally. Writes arrive in M3.
+            Reads are capped, discovery is served from a cache that survives the source
+            going down, and every request is audited locally. Writes arrive in M3.
             """);
     }
 }

@@ -50,6 +50,12 @@ public sealed record DefaultsSection
     public TimeSpan StatementTimeout { get; init; } = TimeSpan.FromSeconds(15);
     public TimeSpan LockTimeout { get; init; } = TimeSpan.FromSeconds(3);
     public TimeSpan WriteHandleTtl { get; init; } = TimeSpan.FromMinutes(2);
+
+    /// <summary>
+    /// How long a schema snapshot stays fresh. Past this it is still served —
+    /// flagged with its age — while a refresh runs behind the response (ADR 0003).
+    /// </summary>
+    public TimeSpan SchemaCacheTtl { get; init; } = TimeSpan.FromMinutes(15);
 }
 
 public sealed record SourceSection

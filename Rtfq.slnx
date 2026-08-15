@@ -4,6 +4,7 @@
     <Project Path="src/Rtfq.Cli/Rtfq.Cli.csproj" />
     <Project Path="src/Rtfq.Client/Rtfq.Client.csproj" />
     <Project Path="src/Rtfq.Contracts/Rtfq.Contracts.csproj" />
+    <Project Path="src/Rtfq.Mcp/Rtfq.Mcp.csproj" />
     <Project Path="src/Rtfq.Server/Rtfq.Server.csproj" />
   </Folder>
   <Folder Name="/tests/">

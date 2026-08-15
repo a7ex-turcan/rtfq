@@ -24,6 +24,7 @@
     <ProjectReference Include="..\..\src\Rtfq.Client\Rtfq.Client.csproj" />
     <ProjectReference Include="..\..\src\Rtfq.Adapters\Rtfq.Adapters.csproj" />
     <ProjectReference Include="..\..\src\Rtfq.Contracts\Rtfq.Contracts.csproj" />
+    <ProjectReference Include="..\..\src\Rtfq.Mcp\Rtfq.Mcp.csproj" />
   </ItemGroup>
 
 </Project>

@@ -52,8 +52,96 @@ public sealed record QueryResponse
     public required bool Truncated { get; init; }
     public required long ElapsedMs { get; init; }
 
-    /// <summary>Reserved for M1 cursor pagination; always null in M0.</summary>
+    /// <summary>
+    /// Always null. Kept in the envelope because it shipped in 0.1.0 and because
+    /// the shape is right if a dialect ever offers a safe cursor — but per
+    /// ADR 0003 truncation is terminal and there is no pagination.
+    /// </summary>
     public string? NextCursor { get; init; }
+
+    /// <summary>
+    /// Present when <see cref="Truncated"/> is true: what the caller should do
+    /// instead. A truncated response that only reports the fact leaves an agent
+    /// to guess, and the guess is usually "ask again", which cannot work.
+    /// </summary>
+    public string? Hint { get; init; }
+}
+
+/// <summary>How old the schema being described is. Present on every discovery response.</summary>
+public sealed record SchemaFreshness
+{
+    public required string CapturedAt { get; init; }
+    public required long AgeSeconds { get; init; }
+    public required bool Stale { get; init; }
+
+    /// <summary>True when this was served from cache because the source could not be reached.</summary>
+    public bool Offline { get; init; }
+}
+
+public sealed record TableSummary
+{
+    /// <summary>Schema-qualified.</summary>
+    public required string Name { get; init; }
+    public required string Kind { get; init; }
+    public long? EstimatedRows { get; init; }
+    public required int Columns { get; init; }
+}
+
+public sealed record DescribeSourceResponse
+{
+    public required string Source { get; init; }
+    public required string Kind { get; init; }
+    public required string Description { get; init; }
+    public required string EffectiveAccess { get; init; }
+    public required SchemaFreshness Schema { get; init; }
+
+    /// <summary>Total tables in the source, which may exceed <see cref="Tables"/> when the list is clipped.</summary>
+    public required int TableCount { get; init; }
+    public required List<TableSummary> Tables { get; init; }
+
+    public required bool Truncated { get; init; }
+    public string? Hint { get; init; }
+}
+
+public sealed record ColumnDetail(string Name, string Type, bool Nullable, string? Default);
+
+public sealed record IndexDetail(string Name, List<string> Columns, bool Unique, bool Primary);
+
+public sealed record ForeignKeyDetail(List<string> Columns, string References, List<string> ReferencedColumns);
+
+public sealed record DescribeTableResponse
+{
+    public required string Table { get; init; }
+    public required string Kind { get; init; }
+    public long? EstimatedRows { get; init; }
+
+    /// <summary>Whether this caller could write here. Always false until M3.</summary>
+    public required bool Writable { get; init; }
+
+    public required SchemaFreshness Schema { get; init; }
+    public required List<ColumnDetail> Columns { get; init; }
+    public List<string> PrimaryKey { get; init; } = [];
+    public List<IndexDetail> Indexes { get; init; } = [];
+    public List<ForeignKeyDetail> ForeignKeys { get; init; } = [];
+}
+
+public sealed record ExplainRequest
+{
+    public required string Source { get; init; }
+    public required string Statement { get; init; }
+}
+
+public sealed record ExplainResponse
+{
+    public required string Plan { get; init; }
+    public required long ElapsedMs { get; init; }
+}
+
+public sealed record SampleRequest
+{
+    public required string Source { get; init; }
+    public required string Table { get; init; }
+    public int? Rows { get; init; }
 }
 
 public sealed record SourceInfo
@@ -83,6 +171,11 @@ public sealed record HealthResponse(string Status, string Version);
 [JsonSerializable(typeof(QueryResponse))]
 [JsonSerializable(typeof(SourcesResponse))]
 [JsonSerializable(typeof(HealthResponse))]
+[JsonSerializable(typeof(DescribeSourceResponse))]
+[JsonSerializable(typeof(DescribeTableResponse))]
+[JsonSerializable(typeof(ExplainRequest))]
+[JsonSerializable(typeof(ExplainResponse))]
+[JsonSerializable(typeof(SampleRequest))]
 [JsonSerializable(typeof(JsonArray))]
 [JsonSourceGenerationOptions(
     PropertyNamingPolicy = JsonKnownNamingPolicy.SnakeCaseLower,

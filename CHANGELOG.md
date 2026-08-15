@@ -11,7 +11,48 @@ are called out under *Changed* rather than buried in *Fixed*.
 
 ## [Unreleased]
 
-Nothing yet. Next up is M1: the MCP read surface and the schema cache.
+**M1 — the MCP read surface and the schema cache.** The go/no-go milestone, and the verdict was GO:
+[ADR 0004](docs/decisions/0004-m1-go-no-go.md) records the evidence.
+
+### Added
+
+- **`rtfq mcp`** — an MCP server over stdio exposing six tools: `list_sources`, `describe_source`,
+  `describe_table`, `sample`, `query` and `explain`. A thin adapter over the same HTTP API the CLI uses; it holds
+  no policy, so talking to the port directly cannot bypass anything.
+- **Schema introspection and an on-disk cache.** Columns, types, nullability, defaults, primary keys, indexes and
+  foreign keys, with planner row estimates rather than `COUNT(*)`.
+- **Discovery survives an unreachable source.** `describe_source` and `describe_table` keep answering from cache
+  when the database is down, and every response states how old the answer is. An agent can draft a correct
+  statement offline and only needs the source live to run it.
+- **`describe`, `refresh`, `explain` and `mcp` CLI commands**, and `explain`/`sample`/`describe_*` on the HTTP API.
+- **A measured token budget.** Discovery output is asserted in CI and printed on every run: `describe_source` on
+  a 202-table database costs ~379 tokens against a 1500 ceiling.
+
+### Changed
+
+- **`query` now injects a `LIMIT` via the parse tree** instead of stopping the row scan, so the planner can
+  optimise for the cap. The scan-stop remains as a backstop, and the injected limit is `cap + 1` so that
+  "exactly full" stays distinguishable from "clipped".
+- **Truncation is terminal and says so.** `next_cursor` is now permanently null and a truncated response carries
+  a `hint` explaining how to narrow, per [ADR 0003](docs/decisions/0003-no-cursor-pagination.md). This reverses
+  the earlier plan to paginate by offset, which would have cost a full scan per page against production.
+- `QueryResponse` gains `hint`; discovery responses are new. Additive, so existing clients are unaffected.
+
+### Security
+
+- **A read-granted token can no longer write.** In 0.1.0, policy checked the *caller* and nothing checked the
+  *statement*, so an `UPDATE` sent to `query` would run if the database credential permitted it — only the
+  `GRANT` stood in the way. The read guard now parses every statement and refuses anything that is not a plain
+  read, including writes hidden inside a CTE, `SELECT INTO`, `COPY ... FROM PROGRAM`, `DO` blocks and
+  `EXPLAIN ANALYZE`. If you ran 0.1.0 against a database whose credential could write, assume that was reachable.
+
+### Known gaps
+
+- Still reads only; the write path is M3.
+- PostgreSQL only; other adapters are M2.
+- `describe_source` clips its table list at 80, so discovery on very large estates depends on filtering.
+- The AOT artifact is **no longer a single file**: the parser is a native library, so bundles now contain the
+  binary plus `libpg_query.so`. Foreseen in [ADR 0001](docs/decisions/0001-sql-parser-selection.md).
 
 ## [0.1.0] - 2026-08-14
 

@@ -1,9 +1,6 @@
 <Project Sdk="Microsoft.NET.Sdk">
   <ItemGroup>
     <ProjectReference Include="..\Rtfq.Contracts\Rtfq.Contracts.csproj" />
-  </ItemGroup>
-  <ItemGroup>
-    <PackageReference Include="Npgquery" Version="1.1.0" />
-    <PackageReference Include="Npgsql" Version="10.0.3" />
+    <ProjectReference Include="..\Rtfq.Client\Rtfq.Client.csproj" />
   </ItemGroup>
 </Project>

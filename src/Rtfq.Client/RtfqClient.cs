@@ -64,6 +64,53 @@ public sealed class RtfqClient : IDisposable
         return await ReadAsync(response, RtfqJson.Default.QueryResponse, cancellationToken).ConfigureAwait(false);
     }
 
+    public async Task<DescribeSourceResponse> DescribeSourceAsync(
+        string source, string? pattern = null, int? limit = null, CancellationToken cancellationToken = default)
+    {
+        var query = new List<string>();
+        if (!string.IsNullOrWhiteSpace(pattern)) query.Add("pattern=" + Uri.EscapeDataString(pattern));
+        if (limit is { } l) query.Add("limit=" + l);
+        var suffix = query.Count > 0 ? "?" + string.Join('&', query) : "";
+
+        using var response = await _http.GetAsync($"/v1/sources/{Uri.EscapeDataString(source)}{suffix}", cancellationToken)
+            .ConfigureAwait(false);
+        return await ReadAsync(response, RtfqJson.Default.DescribeSourceResponse, cancellationToken).ConfigureAwait(false);
+    }
+
+    public async Task<DescribeTableResponse> DescribeTableAsync(
+        string source, string table, CancellationToken cancellationToken = default)
+    {
+        using var response = await _http.GetAsync(
+            $"/v1/sources/{Uri.EscapeDataString(source)}/tables/{Uri.EscapeDataString(table)}", cancellationToken)
+            .ConfigureAwait(false);
+        return await ReadAsync(response, RtfqJson.Default.DescribeTableResponse, cancellationToken).ConfigureAwait(false);
+    }
+
+    public async Task<DescribeSourceResponse> RefreshAsync(string source, CancellationToken cancellationToken = default)
+    {
+        using var response = await _http.PostAsync(
+            $"/v1/sources/{Uri.EscapeDataString(source)}/refresh", content: null, cancellationToken).ConfigureAwait(false);
+        return await ReadAsync(response, RtfqJson.Default.DescribeSourceResponse, cancellationToken).ConfigureAwait(false);
+    }
+
+    public async Task<QueryResponse> SampleAsync(
+        string source, string table, int? rows = null, CancellationToken cancellationToken = default)
+    {
+        var request = new SampleRequest { Source = source, Table = table, Rows = rows };
+        using var response = await _http.PostAsJsonAsync("/v1/sample", request, RtfqJson.Default.SampleRequest, cancellationToken)
+            .ConfigureAwait(false);
+        return await ReadAsync(response, RtfqJson.Default.QueryResponse, cancellationToken).ConfigureAwait(false);
+    }
+
+    public async Task<ExplainResponse> ExplainAsync(
+        string source, string statement, CancellationToken cancellationToken = default)
+    {
+        var request = new ExplainRequest { Source = source, Statement = statement };
+        using var response = await _http.PostAsJsonAsync("/v1/explain", request, RtfqJson.Default.ExplainRequest, cancellationToken)
+            .ConfigureAwait(false);
+        return await ReadAsync(response, RtfqJson.Default.ExplainResponse, cancellationToken).ConfigureAwait(false);
+    }
+
     public async Task<HealthResponse> HealthAsync(CancellationToken cancellationToken = default)
     {
         using var response = await _http.GetAsync("/health", cancellationToken).ConfigureAwait(false);

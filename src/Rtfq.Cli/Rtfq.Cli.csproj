@@ -12,6 +12,7 @@
   <ItemGroup>
     <ProjectReference Include="..\Rtfq.Server\Rtfq.Server.csproj" />
     <ProjectReference Include="..\Rtfq.Client\Rtfq.Client.csproj" />
+    <ProjectReference Include="..\Rtfq.Mcp\Rtfq.Mcp.csproj" />
   </ItemGroup>
 
 </Project>

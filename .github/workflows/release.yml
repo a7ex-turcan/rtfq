@@ -84,14 +84,27 @@ jobs:
           name="rtfq-$VERSION-${{ matrix.rid }}"
           echo "BUNDLE=$name" >> "$GITHUB_ENV"
           mkdir -p "stage/$name/examples"
-          if [ "${{ runner.os }}" = "Windows" ]; then
-            cp publish/rtfq.exe "stage/$name/"
-          else
-            cp publish/rtfq "stage/$name/"
-            chmod +x "stage/$name/rtfq"
-          fi
+
+          # Copy every runtime file, not just the executable. Since M1 the parser
+          # is a native library, so the AOT output is the binary PLUS
+          # libpg_query.so — shipping the binary alone would ship one that cannot
+          # start. Debug symbols are the only thing excluded.
+          find publish -maxdepth 1 -type f \
+            ! -name '*.pdb' ! -name '*.dbg' ! -name '*.dwarf' \
+            -exec cp {} "stage/$name/" \;
+
+          [ "${{ runner.os }}" = "Windows" ] || chmod +x "stage/$name/rtfq"
           cp README.md LICENSE CHANGELOG.md "stage/$name/"
           cp examples/rtfq.dev.yaml "stage/$name/examples/"
+
+      # The bundle must be runnable from where it lands, native library included.
+      - name: Verify the staged bundle runs standalone
+        shell: bash
+        run: |
+          binary="stage/$BUNDLE/rtfq"
+          [ "${{ runner.os }}" = "Windows" ] && binary="stage/$BUNDLE/rtfq.exe"
+          ( cd "stage/$BUNDLE" && ls -1 )
+          "$binary" --version
 
       - name: Archive (tar.gz)
         if: matrix.archive == 'tar'

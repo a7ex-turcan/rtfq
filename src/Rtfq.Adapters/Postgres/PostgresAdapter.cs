@@ -16,6 +16,7 @@ namespace Rtfq.Adapters.Postgres;
 public sealed class PostgresAdapter : ISourceAdapter
 {
     readonly NpgsqlDataSource _dataSource;
+    readonly string[] _schemas;
 
     public string Name { get; }
     public string Kind => "postgres";
@@ -29,6 +30,7 @@ public sealed class PostgresAdapter : ISourceAdapter
     public PostgresAdapter(string name, string connectionString, IReadOnlyList<string> schemas, TimeSpan statementTimeout)
     {
         Name = name;
+        _schemas = [.. schemas];
 
         NpgsqlConnectionStringBuilder csb;
         try
@@ -56,7 +58,11 @@ public sealed class PostgresAdapter : ISourceAdapter
 
         csb.CommandTimeout = (int)Math.Ceiling(statementTimeout.TotalSeconds) + 1;
 
-        _dataSource = new NpgsqlSlimDataSourceBuilder(csb.ConnectionString).Build();
+        // The slim builder opts out of array support by default, and introspection
+        // reads array_agg results and passes schema lists as parameters.
+        _dataSource = new NpgsqlSlimDataSourceBuilder(csb.ConnectionString)
+            .EnableArrays()
+            .Build();
     }
 
     public async Task CheckAsync(CancellationToken cancellationToken)
@@ -75,36 +81,192 @@ public sealed class PostgresAdapter : ISourceAdapter
 
     public async Task<SchemaSnapshot> IntrospectAsync(CancellationToken cancellationToken)
     {
-        const string sql = """
-            SELECT table_schema, table_name, table_type
-            FROM information_schema.tables
-            WHERE table_schema NOT IN ('pg_catalog', 'information_schema')
-              AND (current_setting('search_path') = '"$user", public' OR table_schema = ANY (current_schemas(false)))
-            ORDER BY table_schema, table_name
-            """;
-
-        var tables = new List<TableInfo>();
         try
         {
             await using var conn = await _dataSource.OpenConnectionAsync(cancellationToken).ConfigureAwait(false);
-            await using var cmd = new NpgsqlCommand(sql, conn);
-            await using var reader = await cmd.ExecuteReaderAsync(cancellationToken).ConfigureAwait(false);
 
-            while (await reader.ReadAsync(cancellationToken).ConfigureAwait(false))
+            var tables = await ReadTablesAsync(conn, cancellationToken).ConfigureAwait(false);
+            await ReadColumnsAsync(conn, tables, cancellationToken).ConfigureAwait(false);
+            await ReadIndexesAsync(conn, tables, cancellationToken).ConfigureAwait(false);
+            await ReadForeignKeysAsync(conn, tables, cancellationToken).ConfigureAwait(false);
+
+            return new SchemaSnapshot
             {
-                tables.Add(new TableInfo(
-                    reader.GetString(0),
-                    reader.GetString(1),
-                    reader.GetString(2) == "VIEW" ? "view" : "table"));
-            }
+                Source = Name,
+                CapturedAt = DateTimeOffset.UtcNow,
+                Tables = [.. tables.Values.OrderBy(t => t.Schema, StringComparer.Ordinal)
+                                          .ThenBy(t => t.Name, StringComparer.Ordinal)],
+            };
         }
         catch (Exception ex)
         {
             throw Translate(ex);
         }
-
-        return new SchemaSnapshot(tables, DateTimeOffset.UtcNow);
     }
+
+    // Introspection reads pg_catalog directly rather than information_schema: the
+    // catalog carries planner row estimates and index definitions that the
+    // standard views do not expose.
+
+    async Task<Dictionary<string, TableSchema>> ReadTablesAsync(NpgsqlConnection conn, CancellationToken ct)
+    {
+        const string sql = """
+            SELECT n.nspname,
+                   c.relname,
+                   CASE c.relkind
+                       WHEN 'r' THEN 'table' WHEN 'p' THEN 'table'
+                       WHEN 'v' THEN 'view'  WHEN 'm' THEN 'matview'
+                       ELSE 'foreign' END,
+                   CASE WHEN c.reltuples < 0 THEN NULL ELSE c.reltuples::bigint END
+            FROM pg_class c
+            JOIN pg_namespace n ON n.oid = c.relnamespace
+            WHERE c.relkind = ANY (ARRAY['r','p','v','m','f'])
+              AND n.nspname <> ALL (@excluded)
+              AND (cardinality(@schemas) = 0 OR n.nspname = ANY (@schemas))
+            """;
+
+        var tables = new Dictionary<string, TableSchema>(StringComparer.Ordinal);
+
+        await using var cmd = new NpgsqlCommand(sql, conn);
+        AddSchemaParameters(cmd);
+        await using var reader = await cmd.ExecuteReaderAsync(ct).ConfigureAwait(false);
+
+        while (await reader.ReadAsync(ct).ConfigureAwait(false))
+        {
+            var table = new TableSchema
+            {
+                Schema = reader.GetString(0),
+                Name = reader.GetString(1),
+                Kind = reader.GetString(2),
+                EstimatedRows = reader.IsDBNull(3) ? null : reader.GetInt64(3),
+                Columns = [],
+            };
+            tables[table.QualifiedName] = table;
+        }
+
+        return tables;
+    }
+
+    async Task ReadColumnsAsync(NpgsqlConnection conn, Dictionary<string, TableSchema> tables, CancellationToken ct)
+    {
+        const string sql = """
+            SELECT n.nspname, c.relname, a.attname,
+                   format_type(a.atttypid, a.atttypmod),
+                   NOT a.attnotnull,
+                   pg_get_expr(d.adbin, d.adrelid)
+            FROM pg_attribute a
+            JOIN pg_class c ON c.oid = a.attrelid
+            JOIN pg_namespace n ON n.oid = c.relnamespace
+            LEFT JOIN pg_attrdef d ON d.adrelid = a.attrelid AND d.adnum = a.attnum
+            WHERE a.attnum > 0 AND NOT a.attisdropped
+              AND c.relkind = ANY (ARRAY['r','p','v','m','f'])
+              AND n.nspname <> ALL (@excluded)
+              AND (cardinality(@schemas) = 0 OR n.nspname = ANY (@schemas))
+            ORDER BY n.nspname, c.relname, a.attnum
+            """;
+
+        await using var cmd = new NpgsqlCommand(sql, conn);
+        AddSchemaParameters(cmd);
+        await using var reader = await cmd.ExecuteReaderAsync(ct).ConfigureAwait(false);
+
+        while (await reader.ReadAsync(ct).ConfigureAwait(false))
+        {
+            if (!tables.TryGetValue($"{reader.GetString(0)}.{reader.GetString(1)}", out var table)) continue;
+            table.Columns.Add(new ColumnSchema
+            {
+                Name = reader.GetString(2),
+                Type = reader.GetString(3),
+                Nullable = reader.GetBoolean(4),
+                Default = reader.IsDBNull(5) ? null : reader.GetString(5),
+            });
+        }
+    }
+
+    async Task ReadIndexesAsync(NpgsqlConnection conn, Dictionary<string, TableSchema> tables, CancellationToken ct)
+    {
+        const string sql = """
+            SELECT n.nspname, c.relname, i.relname, ix.indisunique, ix.indisprimary,
+                   array_agg(a.attname ORDER BY k.ord)
+            FROM pg_index ix
+            JOIN pg_class c ON c.oid = ix.indrelid
+            JOIN pg_class i ON i.oid = ix.indexrelid
+            JOIN pg_namespace n ON n.oid = c.relnamespace
+            JOIN LATERAL unnest(ix.indkey) WITH ORDINALITY AS k(attnum, ord) ON true
+            JOIN pg_attribute a ON a.attrelid = c.oid AND a.attnum = k.attnum
+            WHERE n.nspname <> ALL (@excluded)
+              AND (cardinality(@schemas) = 0 OR n.nspname = ANY (@schemas))
+            GROUP BY n.nspname, c.relname, i.relname, ix.indisunique, ix.indisprimary
+            ORDER BY n.nspname, c.relname, i.relname
+            """;
+
+        await using var cmd = new NpgsqlCommand(sql, conn);
+        AddSchemaParameters(cmd);
+        await using var reader = await cmd.ExecuteReaderAsync(ct).ConfigureAwait(false);
+
+        while (await reader.ReadAsync(ct).ConfigureAwait(false))
+        {
+            if (!tables.TryGetValue($"{reader.GetString(0)}.{reader.GetString(1)}", out var table)) continue;
+
+            var columns = reader.GetFieldValue<string[]>(5).ToList();
+            var primary = reader.GetBoolean(4);
+
+            table.Indexes.Add(new IndexSchema
+            {
+                Name = reader.GetString(2),
+                Columns = columns,
+                Unique = reader.GetBoolean(3),
+                Primary = primary,
+            });
+
+            if (primary) table.PrimaryKey.AddRange(columns);
+        }
+    }
+
+    async Task ReadForeignKeysAsync(NpgsqlConnection conn, Dictionary<string, TableSchema> tables, CancellationToken ct)
+    {
+        const string sql = """
+            SELECT n.nspname, c.relname,
+                   array_agg(att.attname  ORDER BY k.ord),
+                   fn.nspname || '.' || fc.relname,
+                   array_agg(fatt.attname ORDER BY k.ord)
+            FROM pg_constraint con
+            JOIN pg_class c       ON c.oid  = con.conrelid
+            JOIN pg_namespace n   ON n.oid  = c.relnamespace
+            JOIN pg_class fc      ON fc.oid = con.confrelid
+            JOIN pg_namespace fn  ON fn.oid = fc.relnamespace
+            JOIN LATERAL unnest(con.conkey, con.confkey) WITH ORDINALITY AS k(att, fatt, ord) ON true
+            JOIN pg_attribute att  ON att.attrelid  = con.conrelid  AND att.attnum  = k.att
+            JOIN pg_attribute fatt ON fatt.attrelid = con.confrelid AND fatt.attnum = k.fatt
+            WHERE con.contype = 'f'
+              AND n.nspname <> ALL (@excluded)
+              AND (cardinality(@schemas) = 0 OR n.nspname = ANY (@schemas))
+            GROUP BY n.nspname, c.relname, con.conname, fn.nspname, fc.relname
+            ORDER BY n.nspname, c.relname, con.conname
+            """;
+
+        await using var cmd = new NpgsqlCommand(sql, conn);
+        AddSchemaParameters(cmd);
+        await using var reader = await cmd.ExecuteReaderAsync(ct).ConfigureAwait(false);
+
+        while (await reader.ReadAsync(ct).ConfigureAwait(false))
+        {
+            if (!tables.TryGetValue($"{reader.GetString(0)}.{reader.GetString(1)}", out var table)) continue;
+            table.ForeignKeys.Add(new ForeignKeySchema
+            {
+                Columns = reader.GetFieldValue<string[]>(2).ToList(),
+                ReferencedTable = reader.GetString(3),
+                ReferencedColumns = reader.GetFieldValue<string[]>(4).ToList(),
+            });
+        }
+    }
+
+    void AddSchemaParameters(NpgsqlCommand cmd)
+    {
+        cmd.Parameters.AddWithValue("schemas", _schemas);
+        cmd.Parameters.AddWithValue("excluded", SystemSchemas);
+    }
+
+    static readonly string[] SystemSchemas = ["pg_catalog", "information_schema", "pg_toast"];
 
     public Task<ReadResult> SampleAsync(string table, int rows, CancellationToken cancellationToken)
     {
@@ -117,6 +279,17 @@ public sealed class PostgresAdapter : ISourceAdapter
 
     public async Task<ReadResult> ExecuteReadAsync(string statement, ReadOptions options, CancellationToken cancellationToken)
     {
+        // Guard first, execute second. Until M1 this method ran whatever it was
+        // given, which meant a read-granted token could send an UPDATE and only
+        // the database GRANT stood in the way.
+        //
+        // The injected limit is cap + 1, not cap. Asking for exactly the cap makes
+        // "the table had exactly 100 rows" indistinguishable from "there were more
+        // and we stopped", and reporting the second as the first is the silent
+        // truncation this envelope exists to prevent. The extra row is read and
+        // discarded purely as evidence.
+        var guarded = PostgresReadGuard.Prepare(statement, options.MaxRows + 1);
+
         var columns = new List<ColumnInfo>();
         var rows = new JsonArray();
         var truncated = false;
@@ -124,7 +297,7 @@ public sealed class PostgresAdapter : ISourceAdapter
         try
         {
             await using var conn = await _dataSource.OpenConnectionAsync(cancellationToken).ConfigureAwait(false);
-            await using var cmd = new NpgsqlCommand(statement, conn)
+            await using var cmd = new NpgsqlCommand(guarded.Statement, conn)
             {
                 CommandTimeout = (int)Math.Ceiling(options.StatementTimeout.TotalSeconds) + 1,
             };
@@ -158,6 +331,37 @@ public sealed class PostgresAdapter : ISourceAdapter
         }
 
         return new ReadResult(columns, rows, rows.Count, truncated);
+    }
+
+    public async Task<string> ExplainAsync(string statement, TimeSpan timeout, CancellationToken cancellationToken)
+    {
+        // Validate without injecting: a LIMIT the caller did not write would
+        // change the plan they asked to see.
+        var guarded = PostgresReadGuard.Prepare(statement, maxRows: null);
+
+        var plan = new StringBuilder();
+        try
+        {
+            await using var conn = await _dataSource.OpenConnectionAsync(cancellationToken).ConfigureAwait(false);
+
+            // FORMAT TEXT, not JSON: this output is read by an agent paying for
+            // every token, and the JSON form of a plan is several times the size
+            // for the same information.
+            await using var cmd = new NpgsqlCommand($"EXPLAIN (COSTS true, FORMAT TEXT) {guarded.Statement}", conn)
+            {
+                CommandTimeout = (int)Math.Ceiling(timeout.TotalSeconds) + 1,
+            };
+
+            await using var reader = await cmd.ExecuteReaderAsync(cancellationToken).ConfigureAwait(false);
+            while (await reader.ReadAsync(cancellationToken).ConfigureAwait(false))
+                plan.AppendLine(reader.GetString(0));
+        }
+        catch (Exception ex)
+        {
+            throw Translate(ex);
+        }
+
+        return plan.ToString().TrimEnd();
     }
 
     /// <summary>

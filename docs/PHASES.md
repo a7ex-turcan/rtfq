@@ -146,20 +146,17 @@ Non-Postgres adapters (M2) · anything that mutates (M3).
 - ✅ Recorded token cost per discovery call is under the stated budget, asserted in CI.
 - ✅ **Container stopped:** `describe_source` and `describe_table` still answer, flagged stale with an age; `query`
   fails with a typed unreachable error. This is the offline-discovery property and it is worth a dedicated test.
-- ✅ Every truncated response is machine-readably truncated, with a usable `next_cursor`.
+- ✅ Every truncated response is machine-readably truncated **and tells the caller what to do about it**.
+  Per [ADR 0003](decisions/0003-no-cursor-pagination.md) there is no cursor: truncation is terminal, and
+  `next_cursor` stays in the envelope as a permanent null.
 - ✅ Go/no-go review held, written down. If the surface is unpleasant, the fix is a redesign here — not a workaround in M2.
 
 ### Risks and decisions
 
-- ❓ **Cursor pagination semantics — genuinely undecided, and not yet in `CLAUDE.md`'s open questions.**
-  Arbitrary caller-authored SQL cannot be keyset-paginated generically. The options:
-  **(a)** re-execute with `OFFSET` — stateless and simple, but non-snapshot: rows can shift between pages;
-  **(b)** hold a server-side cursor in an open transaction with a TTL — consistent, but costs a held connection
-  and a resource-leak surface;
-  **(c)** refuse to paginate and make truncation terminal — the caller narrows the query instead.
-  Lean **(a) with an explicit `snapshot: false` marker in the envelope**, because silence about inconsistency is
-  the actual sin, and (b) reintroduces the held-resource problem the write path already has. Decide before the
-  envelope is frozen.
+- ✔ **Cursor pagination — settled by [ADR 0003](decisions/0003-no-cursor-pagination.md), reversing this doc's
+  earlier lean.** There is no cursor. Offset re-execution costs a full scan per page against production and is
+  not even snapshot-consistent; a held cursor pins a connection idle-in-transaction, which blocks `VACUUM`. And
+  an agent paging thousands of rows into context has already lost. Truncation is terminal and actionable.
 - ⚠ **Compactness is a design problem, not a formatting problem.** If `describe_source` is just a table dump with
   fewer columns, this phase has failed and M2–M5 inherit the failure.
 
@@ -419,7 +416,8 @@ These are not phases; they are properties every phase maintains.
 | ~~Parser per dialect~~ | ~~M2, gates M3~~ | **Settled — [ADR 0001](decisions/0001-sql-parser-selection.md).** ScriptDom for T-SQL, libpg_query for Postgres |
 | Release artifact shape (AOT two-file vs single-file) | M5 | Numbers in [ADR 0001](decisions/0001-sql-parser-selection.md); lean AOT + tarball |
 | Function-call deny-list contents | M3 | Cover the known-dangerous set; the scoped `GRANT` is the real boundary ([ADR 0001](decisions/0001-sql-parser-selection.md)) |
-| Proactive vs. serve-stale-then-refresh | M1 | Whichever keeps `describe_*` fast (`CLAUDE.md` open question) |
+| ~~Proactive vs. serve-stale-then-refresh~~ | ~~M1~~ | **Settled — [ADR 0003](decisions/0003-no-cursor-pagination.md).** Serve stale immediately and refresh behind it; only a cold miss blocks |
+| ~~Cursor pagination semantics~~ | ~~M1~~ | **Settled — [ADR 0003](decisions/0003-no-cursor-pagination.md).** No cursor; truncation is terminal |
 | Affected-row pre-check form | M3 | Parse-tree predicate check, never `EXPLAIN` (`CLAUDE.md` open question) |
 | Before-image size ceiling | M3 | Truncate-with-marker (`CLAUDE.md` open question) |
 | Approval default for schema changes | M3/M4 | Stays per-source — destructive DDL is refused structurally ([ADR 0002](decisions/0002-ddl-additive-and-corrective.md)) |

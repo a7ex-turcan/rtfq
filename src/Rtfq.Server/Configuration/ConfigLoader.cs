@@ -174,6 +174,7 @@ public static class ConfigLoader
             StatementTimeout = c.Duration("statement_timeout", d.StatementTimeout, diags),
             LockTimeout = c.Duration("lock_timeout", d.LockTimeout, diags),
             WriteHandleTtl = c.Duration("write_handle_ttl", d.WriteHandleTtl, diags),
+            SchemaCacheTtl = c.Duration("schema_cache_ttl", d.SchemaCacheTtl, diags),
         };
         c.ReportUnknownKeys();
         return d;

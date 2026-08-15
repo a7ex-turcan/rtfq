@@ -86,7 +86,7 @@ public sealed class RtfqFixture : IAsyncLifetime
                     DsnWasReference = true,
                     Description = "Order lifecycle",
                     Access = AccessLevel.Read,
-                    Schemas = ["public"],
+                    Schemas = ["public", "wide"],
                     MaxRows = SourceMaxRows,
                 },
             ],
@@ -96,23 +96,59 @@ public sealed class RtfqFixture : IAsyncLifetime
         BaseAddress = _server.BaseAddress;
     }
 
+    /// <summary>Tables in the generated <c>wide</c> schema, so the token budget is measured against a realistic estate.</summary>
+    public const int WideTables = 200;
+
     static async Task SeedAsync(string connectionString)
     {
         await using var conn = new NpgsqlConnection(connectionString);
         await conn.OpenAsync();
-        await using var cmd = new NpgsqlCommand($"""
-            CREATE TABLE orders (
-                id         int primary key,
-                customer   text not null,
-                total      numeric(10,2) not null,
-                vip        boolean not null,
-                created_at timestamptz not null default now()
+
+        await using (var cmd = new NpgsqlCommand($"""
+            CREATE TABLE customers (
+                id    int primary key,
+                email text not null unique,
+                tier  int  not null default 0
             );
-            INSERT INTO orders (id, customer, total, vip)
-            SELECT g, 'customer-' || g, (g * 1.5)::numeric(10,2), g % 7 = 0
+            INSERT INTO customers (id, email, tier)
+            SELECT g, 'customer-' || g || '@example.test', g % 3
+            FROM generate_series(1, 40) g;
+
+            CREATE TABLE orders (
+                id          int primary key,
+                customer    text not null,
+                customer_id int references customers(id),
+                total       numeric(10,2) not null,
+                vip         boolean not null,
+                created_at  timestamptz not null default now()
+            );
+            INSERT INTO orders (id, customer, customer_id, total, vip)
+            SELECT g, 'customer-' || g, ((g % 40) + 1), (g * 1.5)::numeric(10,2), g % 7 = 0
             FROM generate_series(1, {SeededRows}) g;
-            """, conn);
-        await cmd.ExecuteNonQueryAsync();
+
+            CREATE INDEX idx_orders_vip ON orders (vip);
+            ANALYZE customers;
+            ANALYZE orders;
+            """, conn))
+        {
+            await cmd.ExecuteNonQueryAsync();
+        }
+
+        // A wide schema, so describe_source is exercised against the size of
+        // database where compactness actually matters.
+        await using (var cmd = new NpgsqlCommand($"""
+            CREATE SCHEMA wide;
+            DO $$
+            BEGIN
+              FOR i IN 1..{WideTables} LOOP
+                EXECUTE format(
+                  'CREATE TABLE wide.entity_%s (id int primary key, name text, amount numeric, at timestamptz)', i);
+              END LOOP;
+            END $$;
+            """, conn))
+        {
+            await cmd.ExecuteNonQueryAsync();
+        }
     }
 
     static (string CertPath, string KeyPath) WriteSelfSignedCertificate(string directory)

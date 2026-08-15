@@ -21,6 +21,7 @@
   <ItemGroup>
     <ProjectReference Include="..\..\src\Rtfq.Server\Rtfq.Server.csproj" />
     <ProjectReference Include="..\..\src\Rtfq.Contracts\Rtfq.Contracts.csproj" />
+    <ProjectReference Include="..\..\src\Rtfq.Adapters\Rtfq.Adapters.csproj" />
   </ItemGroup>
 
 </Project>
