@@ -1,4 +1,5 @@
 using System.Net;
+using Rtfq.Adapters;
 using Rtfq.Contracts;
 
 namespace Rtfq.Server.Configuration;
@@ -14,10 +15,9 @@ namespace Rtfq.Server.Configuration;
 /// </summary>
 public static class ConfigValidator
 {
-    static readonly string[] SupportedKinds = ["postgres"];
-
-    /// <summary>Kinds whose adapter can do transactional DDL, and so may declare access: schema (ADR 0002).</summary>
-    static readonly string[] TransactionalDdlKinds = ["postgres", "mssql"];
+    // Which kinds exist and what they can do is the adapter layer's knowledge, not
+    // the validator's. Hardcoding it here was a leak the M2 interface audit found:
+    // adding an engine would have meant editing this file.
 
     public static ValidationResult Validate(RtfqConfig config, bool production)
     {
@@ -122,12 +122,18 @@ public static class ConfigValidator
 
             if (string.IsNullOrEmpty(source.Kind))
                 d.Add(new("source.kind_supported", Severity.Error, $"source '{source.Name}' has no kind", $"{path}.kind"));
-            else if (!SupportedKinds.Contains(source.Kind, StringComparer.Ordinal))
+            else if (!AdapterCatalog.IsKnown(source.Kind))
                 d.Add(new("source.kind_supported", Severity.Error,
-                    $"source kind '{source.Kind}' is not supported yet - M0 ships {string.Join(", ", SupportedKinds)}",
+                    $"source kind '{source.Kind}' is not supported - available: {string.Join(", ", AdapterCatalog.Kinds.Order(StringComparer.Ordinal))}",
                     $"{path}.kind"));
 
-            if (string.IsNullOrEmpty(source.Dsn))
+            ValidateHttp(source, path, production, d);
+
+            if (source.Kind == "http")
+            {
+                // An HTTP source has a base_url instead of a dsn.
+            }
+            else if (string.IsNullOrEmpty(source.Dsn))
                 d.Add(new("source.dsn_present", Severity.Error,
                     $"source '{source.Name}' has no dsn", $"{path}.dsn"));
             else if (!source.DsnWasReference && SecretResolver.LooksLikeInlineSecret(source.Dsn))
@@ -137,24 +143,103 @@ public static class ConfigValidator
                     $"{path}.dsn"));
 
             // ADR 0002: an adapter that cannot do transactional DDL may not be
-            // marked access: schema. Registered now; fires the moment a Mongo or
-            // HTTP source exists.
-            if (source.Access == AccessLevel.Schema &&
-                source.Kind.Length > 0 &&
-                !TransactionalDdlKinds.Contains(source.Kind, StringComparer.Ordinal))
+            // marked access: schema. What each kind can do is asked of the adapter
+            // layer rather than restated here.
+            var declared = AdapterCatalog.DeclaredCapabilities(source.Kind);
+
+            if (declared is not null && source.Access >= AccessLevel.Schema && !declared.TransactionalDdl)
             {
                 d.Add(new("source.schema_requires_transactional_ddl", Severity.Error,
-                    $"source '{source.Name}' is kind '{source.Kind}', which cannot do transactional DDL, so it may not declare access: schema",
+                    $"source '{source.Name}' is kind '{source.Kind}', which cannot roll back DDL, so it may not declare access: schema",
                     $"{path}.access"));
             }
 
-            // Registered for M2, inert until those kinds load:
-            //   source.mongo_standalone_not_writable
-            //   source.http_wildcard_write
+            // Only fires for kinds that can NEVER do transactional writes. MongoDB
+            // can, on a replica set, so its equivalent check needs a live
+            // connection and happens at startup instead.
+            if (declared is not null && source.Access >= AccessLevel.Write && !declared.TransactionalWrites)
+            {
+                d.Add(new("source.writes_require_transactions", Severity.Error,
+                    $"source '{source.Name}' is kind '{source.Kind}', which has no transactions, so it may not be writable",
+                    $"{path}.access"));
+            }
         }
 
         if (config.Sources.Count == 0)
             d.Add(new("sources.present", Severity.Warning, "no sources are declared", "sources"));
+    }
+
+    static void ValidateHttp(SourceSection source, string path, bool production, List<Diagnostic> d)
+    {
+        if (source.Kind != "http") return;
+
+        if (string.IsNullOrEmpty(source.BaseUrl))
+        {
+            d.Add(new("http.base_url_present", Severity.Error,
+                $"source '{source.Name}' has no base_url", $"{path}.base_url"));
+        }
+        else if (!Uri.TryCreate(source.BaseUrl, UriKind.Absolute, out var uri))
+        {
+            d.Add(new("http.base_url_absolute", Severity.Error,
+                $"base_url '{source.BaseUrl}' is not an absolute URL", $"{path}.base_url"));
+        }
+        else if (uri.Scheme == "http" && production)
+        {
+            d.Add(new("http.tls_in_production", Severity.Error,
+                $"source '{source.Name}' talks plain HTTP; production requires https", $"{path}.base_url"));
+        }
+
+        if (source.AllowPaths.Count == 0)
+        {
+            d.Add(new("http.allow_paths_present", Severity.Error,
+                $"source '{source.Name}' has no allow_paths, so it can reach nothing. State the paths explicitly.",
+                $"{path}.allow_paths"));
+        }
+
+        // The rule CLAUDE.md calls out by name: a wildcard path combined with a
+        // write method is a validation ERROR, not a warning. The two are harmless
+        // apart and hand over the whole API together.
+        var writeMethods = source.Methods
+            .Where(m => !string.Equals(m, "GET", StringComparison.OrdinalIgnoreCase)
+                     && !string.Equals(m, "HEAD", StringComparison.OrdinalIgnoreCase))
+            .ToList();
+
+        if (writeMethods.Count > 0)
+        {
+            foreach (var wildcard in source.AllowPaths.Where(p => p.Contains('*', StringComparison.Ordinal)))
+            {
+                d.Add(new("http.wildcard_write", Severity.Error,
+                    $"source '{source.Name}' allows {string.Join("/", writeMethods)} against the wildcard path " +
+                    $"'{wildcard}'. A wildcard plus a write method hands over the whole API; list the paths explicitly.",
+                    $"{path}.allow_paths"));
+            }
+        }
+
+        foreach (var badPath in source.AllowPaths.Where(p => !p.StartsWith('/')))
+        {
+            d.Add(new("http.allow_path_rooted", Severity.Error,
+                $"allow_path '{badPath}' must start with '/'", $"{path}.allow_paths"));
+        }
+
+        // At most one wildcard, and only at the very end. A pattern like
+        // "/v1/*/invoices" reads as narrow and matches broadly, and "/v1/*/*" ends
+        // in a star while still containing one in the middle — so counting matters
+        // as much as position.
+        foreach (var badPath in source.AllowPaths.Where(p =>
+                     p.Count(c => c == '*') > 1 || (p.Contains('*', StringComparison.Ordinal) && !p.EndsWith('*'))))
+        {
+            d.Add(new("http.wildcard_suffix_only", Severity.Error,
+                $"allow_path '{badPath}' may use at most one '*', and only as the final character",
+                $"{path}.allow_paths"));
+        }
+
+        if (source.HeadersHadInlineSecret)
+        {
+            d.Add(new("http.header_not_inline",
+                production ? Severity.Error : Severity.Warning,
+                $"source '{source.Name}' has a header value written into the config - use ${{env:...}} or ${{file:...}}",
+                $"{path}.headers"));
+        }
     }
 
     /// <summary>Parses <c>host:port</c>. Accepts bare IPv4/IPv6 and hostnames that resolve to a literal.</summary>

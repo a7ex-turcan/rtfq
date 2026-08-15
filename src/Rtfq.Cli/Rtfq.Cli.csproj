@@ -10,6 +10,22 @@
   </PropertyGroup>
 
   <ItemGroup>
+    <!--
+      Required, not defensive. Without these, the published AOT binary throws
+      MissingMethodException on the very first Mongo call: BsonDocument.Parse
+      reaches BsonDefaults.DynamicArraySerializer, which looks up a serializer
+      constructor reflectively, and the trimmer has removed it.
+
+      This refutes the assumption the suppression was originally granted on —
+      that BsonDocument-only usage avoids the reflective paths. It does not.
+      Rooting costs roughly 12 MB and is verified by running the published binary
+      against a real MongoDB, not by reasoning about which paths are reached.
+    -->
+    <TrimmerRootAssembly Include="MongoDB.Bson" />
+    <TrimmerRootAssembly Include="MongoDB.Driver" />
+  </ItemGroup>
+
+  <ItemGroup>
     <ProjectReference Include="..\Rtfq.Server\Rtfq.Server.csproj" />
     <ProjectReference Include="..\Rtfq.Client\Rtfq.Client.csproj" />
     <ProjectReference Include="..\Rtfq.Mcp\Rtfq.Mcp.csproj" />

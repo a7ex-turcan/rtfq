@@ -3,6 +3,9 @@
     <ProjectReference Include="..\Rtfq.Contracts\Rtfq.Contracts.csproj" />
   </ItemGroup>
   <ItemGroup>
+    <PackageReference Include="Microsoft.Data.SqlClient" Version="7.0.2" />
+    <PackageReference Include="Microsoft.SqlServer.TransactSql.ScriptDom" Version="180.78.1" />
+    <PackageReference Include="MongoDB.Driver" Version="3.11.0" />
     <PackageReference Include="Npgquery" Version="1.1.0" />
     <PackageReference Include="Npgsql" Version="10.0.3" />
   </ItemGroup>

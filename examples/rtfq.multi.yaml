@@ -1,0 +1,82 @@
+# All four source kinds in one config.
+#
+# Read-only throughout: writes arrive in M3. Every secret is a reference, so this
+# one passes `rtfq validate --production` provided TLS is configured.
+#
+#   rtfq validate --config examples/rtfq.multi.yaml
+
+server:
+  listen: 0.0.0.0:7420
+
+  # Required the moment the listener leaves this machine. Not a knob.
+  # Paths come from the environment because they differ per deployment, and
+  # because it lets this example be validated rather than only read.
+  tls:
+    cert: ${env:RTFQ_TLS_CERT}
+    key: ${env:RTFQ_TLS_KEY}
+
+  auth:
+    mode: token
+    tokens:
+      - id: agent-readonly
+        secret: ${env:RTFQ_TOKEN_AGENT}
+        grants:
+          orders: read
+          warehouse: read
+          catalog: read
+          billing-api: read
+
+defaults:
+  max_rows: 1000
+  statement_timeout: 15s
+  schema_cache_ttl: 15m
+
+sources:
+  # --- PostgreSQL ----------------------------------------------------------
+  - name: orders
+    kind: postgres
+    dsn: ${env:ORDERS_DSN}
+    description: Order lifecycle, fulfilment, returns
+    schemas: [public, fulfilment]
+    max_rows: 500
+
+  # --- SQL Server ------------------------------------------------------------
+  # Statements are T-SQL. Note that a SQL Server source makes the Linux binary
+  # require libicu on the host: the driver refuses to run in invariant
+  # globalization mode.
+  - name: warehouse
+    kind: mssql
+    dsn: ${env:WAREHOUSE_DSN}
+    description: Stock levels and pick lists
+    schemas: [dbo]
+
+  # --- MongoDB ----------------------------------------------------------------
+  # Statements are command documents in Mongo's own dialect, for example
+  #   {"find": "products", "filter": {"discontinued": false}}
+  #
+  # Schema is INFERRED from sampled documents and every description says so.
+  # access: schema is never available here — Mongo cannot roll back DDL — and
+  # access: write requires a replica set, which is checked when the server starts
+  # rather than when the config is validated.
+  - name: catalog
+    kind: mongodb
+    dsn: ${env:CATALOG_URI}
+    description: Product catalogue
+    databases: [catalog]
+
+  # --- HTTP API -----------------------------------------------------------------
+  # Statements are request lines, for example: GET /v1/invoices?status=open
+  #
+  # allow_paths is mandatory: an empty allow-list reaches nothing rather than
+  # everything. A wildcard path combined with a write method is a validation
+  # ERROR, because together they hand over the whole API.
+  - name: billing-api
+    kind: http
+    base_url: https://billing.internal
+    description: Invoices and payment status
+    methods: [GET]
+    allow_paths:
+      - /v1/invoices
+      - /v1/invoices/*
+    headers:
+      Authorization: ${env:BILLING_TOKEN}

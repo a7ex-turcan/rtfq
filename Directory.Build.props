@@ -19,7 +19,7 @@
     <LangVersion>latest</LangVersion>
     <Nullable>enable</Nullable>
     <ImplicitUsings>enable</ImplicitUsings>
-    <InvariantGlobalization>true</InvariantGlobalization>
+    <InvariantGlobalization>false</InvariantGlobalization>
 
     <!--
       ADR 0001: a trimmed reflection walk turned the statement guard into a
@@ -28,6 +28,26 @@
     -->
     <TreatWarningsAsErrors>true</TreatWarningsAsErrors>
     <EnableNETAnalyzers>true</EnableNETAnalyzers>
+
+    <!--
+      IL2104 / IL3053 are the per-assembly rollups the trimmer emits for a
+      *referenced* library containing reflective code. Six trip them, all
+      third-party: Microsoft.Data.SqlClient (+ its logging assembly),
+      Microsoft.SqlServer.TransactSql.ScriptDom, MongoDB.Bson, MongoDB.Driver and
+      System.Configuration.ConfigurationManager.
+
+      Accepted on evidence rather than argument. Per ADR 0001 the only build that
+      counts is the published one, so the AOT binary is run against a real SQL
+      Server and MongoDB and must refuse a write, refuse EXEC, refuse $out and
+      refuse $where — the guard paths through the trimmed code. It does.
+      MongoDB additionally needs TrimmerRootAssembly; see Rtfq.Cli.csproj.
+
+      Left as warnings rather than suppressed so they stay in the publish log, and
+      CI asserts the set of dirty assemblies is exactly this list — a new one
+      appearing is a build failure rather than something nobody notices. Warnings
+      from our own code are reported individually and remain errors.
+    -->
+    <WarningsNotAsErrors>$(WarningsNotAsErrors);IL2104;IL3053</WarningsNotAsErrors>
   </PropertyGroup>
 
   <!-- Product code must stay AOT-clean. Test projects need not. -->

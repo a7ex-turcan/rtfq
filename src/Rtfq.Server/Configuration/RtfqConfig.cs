@@ -71,6 +71,28 @@ public sealed record SourceSection
     public int? MaxRows { get; init; }
     public TimeSpan? StatementTimeout { get; init; }
 
+    /// <summary>MongoDB: databases to introspect. Empty means every non-system database.</summary>
+    public IReadOnlyList<string> Databases { get; init; } = [];
+
+    // --- HTTP sources -------------------------------------------------------
+
+    public string BaseUrl { get; init; } = "";
+
+    /// <summary>Permitted methods. Absent means GET only — never inferred as "all".</summary>
+    public IReadOnlyList<string> Methods { get; init; } = [];
+
+    /// <summary>
+    /// Permitted paths, with a trailing <c>*</c> allowed as a prefix wildcard.
+    /// Empty means nothing is reachable: an HTTP source with no allow-list is not
+    /// an open one.
+    /// </summary>
+    public IReadOnlyList<string> AllowPaths { get; init; } = [];
+
+    public IReadOnlyDictionary<string, string> Headers { get; init; } = new Dictionary<string, string>();
+
+    /// <summary>Whether any header value was written into the file rather than referenced.</summary>
+    public bool HeadersHadInlineSecret { get; init; }
+
     public int EffectiveMaxRows(DefaultsSection d) => MaxRows ?? d.MaxRows;
     public TimeSpan EffectiveStatementTimeout(DefaultsSection d) => StatementTimeout ?? d.StatementTimeout;
 }

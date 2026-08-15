@@ -50,7 +50,23 @@ jobs:
         run: sudo apt-get update && sudo apt-get install -y clang zlib1g-dev
 
       - name: Publish NativeAOT
-        run: dotnet publish src/Rtfq.Cli -c Release -r linux-x64 -o out
+        run: dotnet publish src/Rtfq.Cli -c Release -r linux-x64 -o out 2>&1 | tee publish.log
+
+      # IL2104/IL3053 are warnings rather than errors because six third-party
+      # assemblies contain reflective code (see Directory.Build.props). That
+      # allowance is policed rather than remembered: a NEW dirty assembly means
+      # code nobody has verified against the published binary.
+      - name: Only the known assemblies may produce trim warnings
+        run: |
+          allowed="Microsoft.Data.SqlClient|Microsoft.Data.SqlClient.Internal.Logging|Microsoft.SqlServer.TransactSql.ScriptDom|MongoDB.Bson|MongoDB.Driver|System.Configuration.ConfigurationManager"
+          found=$(grep -oE "Assembly '[A-Za-z0-9._]+'" publish.log | sed -E "s/Assembly '(.*)'/\1/" | sort -u || true)
+          echo "assemblies producing trim warnings:"; echo "$found" | sed 's/^/  /'
+          unexpected=$(echo "$found" | grep -vE "^($allowed)$" || true)
+          if [ -n "$unexpected" ]; then
+            echo "::error::unexpected assembly producing trim warnings: $unexpected"
+            echo "::error::verify it against the published binary before adding it to the allow-list"
+            exit 1
+          fi
 
       # The sample references its secrets rather than inlining them, so validating
       # it requires the same variables an operator would export.
@@ -79,6 +95,21 @@ jobs:
             echo "::error::refused, but not by the TLS rule this step exists to test"
             exit 1
           }
+
+      # The multi-source example is the production shape: every kind, TLS, and
+      # secrets by reference. It must validate under --production, or the
+      # documentation is showing people a config that would be refused.
+      - name: The multi-source example passes production validation
+        env:
+          RTFQ_TOKEN_AGENT: ci-token
+          ORDERS_DSN: Host=localhost;Database=orders;Username=rtfq
+          WAREHOUSE_DSN: Server=localhost;Database=wh;User Id=rtfq;Password=x
+          CATALOG_URI: mongodb://localhost:27017
+          BILLING_TOKEN: Bearer ci-token
+        run: |
+          mkdir -p /tmp/tls && touch /tmp/tls/tls.crt /tmp/tls/tls.key
+          export RTFQ_TLS_CERT=/tmp/tls/tls.crt RTFQ_TLS_KEY=/tmp/tls/tls.key
+          ./out/rtfq validate --config examples/rtfq.multi.yaml --production
 
       # Unresolvable secrets must fail loudly rather than defaulting to empty.
       # This exact case broke the first CI run, so it stays as a regression test.

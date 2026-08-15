@@ -188,14 +188,19 @@ Non-Postgres adapters (M2) · anything that mutates (M3).
 
 Writes for any adapter (M3) — including Mongo, whose transactional story is the reason M3 needs it landed first.
 
-### Exit criteria
+### Exit criteria — **met; see [ADR 0005](decisions/0005-m2-interface-audit.md)**
 
-- ✅ All four adapters pass a shared conformance suite (connect, introspect, sample, read, cap, timeout, unreachable)
-  against real containerized instances.
-- ✅ The interface audit lists **zero** dialect-specific branches above `Rtfq.Adapters`. Any that exist are
-  written up as interface bugs with a fix, per the working agreements.
-- ✅ Config validation rejects: Mongo-standalone marked writable; HTTP wildcard + `POST`.
-- ✅ `describe_*` output for Mongo marks inferred schema as inferred, with the sample size it was inferred from.
+- ✅ All four adapters pass a shared conformance suite against real containerized instances. The suite contains
+  no per-adapter branching, which is the actual evidence.
+- ✅ The interface audit found **one** leak — `ConfigValidator` had hardcoded which kinds support transactional
+  writes and DDL — and it was fixed by moving that knowledge into `AdapterCatalog` in the adapter layer.
+- ✅ Mongo-standalone marked writable is refused; because topology needs a live connection, this moved from
+  config validation to a **startup** capability check. An unreachable source stays a warning.
+- ✅ HTTP wildcard + a write method is refused, as is a wildcard anywhere but the final character.
+- ✅ Mongo schema is flagged `inferred`, and a field with more than one observed type reports all of them
+  (`total double|int32`) rather than picking one.
+- ⚠ **Open, and blocking the next release:** a glibc 2.38 floor from the new dependencies, and a `libicu`
+  requirement on Linux hosts introduced by SQL Server's driver.
 
 ### Risks and decisions
 
@@ -210,9 +215,10 @@ Writes for any adapter (M3) — including Mongo, whose transactional story is th
 - ⚠ **The guard is an allow-list, not a DDL deny-list** — an ADR 0001 finding that changes this phase's shape.
   `COPY ... FROM PROGRAM`, `DO`, `EXPLAIN ANALYZE`, `GRANT`, `SET ROLE` and `EXEC xp_cmdshell` are none of them
   DDL, and all of them are catastrophic. Execute only the enumerated node types; refuse everything else by default.
-- ⚠ **Mongo's "statement" is not a string.** If the guard interface assumes SQL text, Mongo will bend the core —
-  exactly the leak this phase exists to catch. Classification belongs to the adapter; the core sees a
-  *classification result*, not a dialect.
+- ✔ **Mongo's "statement" is not a string** — and the interface held anyway, because a Mongo command document
+  *is* its native dialect. `{"find": "orders", "filter": {...}}` is a statement in the same sense a `SELECT` is,
+  and the adapter parses its own. Nothing above the adapter learned that documents exist
+  ([ADR 0005](decisions/0005-m2-interface-audit.md)).
 
 ---
 

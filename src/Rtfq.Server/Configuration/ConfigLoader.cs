@@ -211,11 +211,28 @@ public static class ConfigLoader
             var maxRows = s.NullableInt("max_rows", diags);
             var timeout = s.NullableDuration("statement_timeout", diags);
             var description = s.Secret("description", out _) ?? "";
+            var databases = s.StringList("databases");
+            var baseUrl = s.Secret("base_url", out _) ?? "";
+            var methods = s.StringList("methods");
+            var allowPaths = s.StringList("allow_paths");
 
-            // Consume keys that later milestones own, so M0 does not reject a
-            // config written against the documented shape.
-            s.Reserve("databases", "require_approval", "max_affected_rows", "deny_tables",
-                      "writable_tables", "base_url", "methods", "allow_paths", "headers");
+            var headers = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
+            var headersInline = false;
+            if (s.Map("headers") is { } headerMap)
+            {
+                foreach (var (key, _) in headerMap.Entries())
+                {
+                    var value = headerMap.Secret(key, out var wasReference);
+                    if (value is null) continue;
+                    headers[key] = value;
+                    if (!wasReference) headersInline = true;
+                }
+                headerMap.MarkAllUsed();
+            }
+
+            // Consume keys that later milestones own, so a config written against
+            // the documented shape is not rejected before its phase arrives.
+            s.Reserve("require_approval", "max_affected_rows", "deny_tables", "writable_tables");
             s.ReportUnknownKeys();
 
             if (string.IsNullOrEmpty(name))
@@ -235,6 +252,12 @@ public static class ConfigLoader
                 Schemas = schemas,
                 MaxRows = maxRows,
                 StatementTimeout = timeout,
+                Databases = databases,
+                BaseUrl = baseUrl,
+                Methods = methods,
+                AllowPaths = allowPaths,
+                Headers = headers,
+                HeadersHadInlineSecret = headersInline,
             });
         }
 

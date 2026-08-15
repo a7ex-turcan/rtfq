@@ -75,8 +75,42 @@ public sealed class RtfqServer : IAsyncDisposable
         var app = builder.Build();
         ApiEndpoints.Map(app);
 
+        await CheckCapabilitiesAsync(app, config, sources, cancellationToken).ConfigureAwait(false);
+
         await app.StartAsync(cancellationToken).ConfigureAwait(false);
         return new RtfqServer(app, sources, audit);
+    }
+
+    /// <summary>
+    /// Some declarations can only be checked against a live source: MongoDB does
+    /// transactions on a replica set and not on a standalone, and the config
+    /// cannot say which is out there. So <c>rtfq validate</c> stays offline and
+    /// this runs at startup.
+    ///
+    /// A source that is simply unreachable is a warning, not a failure — refusing
+    /// to start because one database is down would contradict the offline
+    /// discovery this server is built around.
+    /// </summary>
+    static async Task CheckCapabilitiesAsync(
+        WebApplication app, RtfqConfig config, SourceRegistry sources, CancellationToken cancellationToken)
+    {
+        var logger = app.Services.GetRequiredService<ILoggerFactory>().CreateLogger("Rtfq.Startup");
+
+        var problems = await sources
+            .CheckCapabilitiesAsync(config, TimeSpan.FromSeconds(10), cancellationToken)
+            .ConfigureAwait(false);
+
+        foreach (var problem in problems.Where(p => !p.Fatal))
+            logger.LogWarning("Source {Source} {Message}", problem.Source, problem.Message);
+
+        var fatal = problems.Where(p => p.Fatal).ToList();
+        if (fatal.Count == 0) return;
+
+        var detail = string.Join(Environment.NewLine,
+            fatal.Select(p => $"  {p.Source}: {p.Message}"));
+
+        throw new InvalidOperationException(
+            $"refusing to start; {fatal.Count} source(s) declare access their deployment cannot support:{Environment.NewLine}{detail}");
     }
 
     public Task WaitForShutdownAsync(CancellationToken cancellationToken = default) =>

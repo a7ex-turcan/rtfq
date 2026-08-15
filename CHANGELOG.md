@@ -11,7 +11,46 @@ are called out under *Changed* rather than buried in *Fixed*.
 
 ## [Unreleased]
 
-Nothing yet. Next up is M2: SQL Server, MongoDB and HTTP adapters.
+**M2 — SQL Server, MongoDB and HTTP adapters.** The interface held; see
+[ADR 0005](docs/decisions/0005-m2-interface-audit.md).
+
+### Added
+
+- **SQL Server** (`kind: mssql`) via `Microsoft.Data.SqlClient`, with a read guard on Microsoft's own ScriptDom,
+  catalog introspection including row estimates and indexes, and `SHOWPLAN_ALL` for `explain`.
+- **MongoDB** (`kind: mongodb`). Statements are command documents — `{"find": "orders", "filter": {…}}` — which is
+  Mongo's own dialect. Schema is **inferred** from sampled documents and says so, reporting every observed type
+  for a field (`total double|int32`) rather than picking one.
+- **HTTP APIs** (`kind: http`). Statements are request lines: `GET /v1/invoices?status=open`. Paths must be
+  explicitly allow-listed; an empty allow-list reaches nothing rather than everything.
+- **A shared adapter conformance suite** every adapter runs unmodified against a real containerised instance.
+- **Startup capability checks.** Some declarations can only be tested against a live source, so `rtfq validate`
+  stays offline and the server verifies at boot. A source that cannot support its declared access stops startup;
+  a source that is merely unreachable is a warning.
+
+### Changed
+
+- `ISourceAdapter.CheckAsync` returns capabilities instead of void, because MongoDB's transaction support depends
+  on deployment topology and cannot be known at construction.
+- Which kinds exist and what they can do moved into `AdapterCatalog`; config validation asks the adapter layer
+  rather than keeping its own list. This was the one leak the interface audit found.
+
+### Security
+
+- **Guards for all three new dialects**, each covering its own version of "not a write command, but catastrophic":
+  T-SQL `EXEC`/`sp_executesql`/`xp_cmdshell` (dynamic SQL the parse tree cannot see into), Mongo's `$out` and
+  `$merge` (aggregation *stages* that write a collection) and `$where`/`$function` (server-side JavaScript), and
+  for HTTP a wildcard path combined with a write method, which is now a config error.
+- All guards are **verified in the published AOT binary** against real servers, not only under the JIT.
+
+### Known gaps
+
+- ⚠ **Linux hosts now need `libicu` installed.** `Microsoft.Data.SqlClient` refuses to run in invariant
+  globalization mode, so that setting had to be turned off. Windows and macOS are unaffected.
+- ⚠ **A glibc 2.38 floor**, introduced by the new dependencies. A binary built on a modern host will not start on
+  Debian 12, Ubuntu 22.04 or RHEL 9. **This must be fixed before the next release.**
+- The binary is now ~66 MB, up from 20 MB.
+- Still reads only; the write path is M3.
 
 ## [0.2.0] - 2026-08-15
 

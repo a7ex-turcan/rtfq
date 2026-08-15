@@ -5,10 +5,6 @@ using Rtfq.Contracts;
 
 namespace Rtfq.Adapters.Postgres;
 
-/// <param name="Statement">The statement to execute, with a LIMIT injected where one was missing.</param>
-/// <param name="Rewritten">Whether the statement differs from what the caller sent.</param>
-public readonly record struct GuardedRead(string Statement, bool Rewritten);
-
 /// <summary>
 /// The read half of the statement guard, arriving with M1 because LIMIT injection
 /// needs a parse tree anyway.

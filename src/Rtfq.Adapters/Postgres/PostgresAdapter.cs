@@ -65,13 +65,17 @@ public sealed class PostgresAdapter : ISourceAdapter
             .Build();
     }
 
-    public async Task CheckAsync(CancellationToken cancellationToken)
+    public async Task<SourceCapabilities> CheckAsync(CancellationToken cancellationToken)
     {
         try
         {
             await using var conn = await _dataSource.OpenConnectionAsync(cancellationToken).ConfigureAwait(false);
             await using var cmd = new NpgsqlCommand("SELECT 1", conn);
             await cmd.ExecuteScalarAsync(cancellationToken).ConfigureAwait(false);
+
+            // Nothing here depends on topology: a reachable PostgreSQL always
+            // supports transactional DML and DDL.
+            return Capabilities;
         }
         catch (Exception ex)
         {
