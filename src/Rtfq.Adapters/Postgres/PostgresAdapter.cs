@@ -425,6 +425,16 @@ public sealed class PostgresAdapter : ISourceAdapter
         PostgresException { SqlState: "57014" } pg
             => new AdapterException(ErrorCodes.SourceTimeout, "statement exceeded statement_timeout", pg),
 
+        // The engine can answer and still be unavailable: a server that is shutting
+        // down or not yet accepting connections replies with an error, and reporting
+        // that as "your statement was rejected" sends the caller to debug a
+        // statement that was fine. Class 08 is connection_exception; 57P0x is
+        // admin/crash shutdown and cannot_connect_now.
+        PostgresException pg when pg.SqlState.StartsWith("08", StringComparison.Ordinal)
+                                  || pg.SqlState is "57P01" or "57P02" or "57P03"
+            => new AdapterException(ErrorCodes.SourceUnreachable,
+                $"source is unavailable: {pg.MessageText} (SQLSTATE {pg.SqlState})", pg),
+
         PostgresException pg
             => new AdapterException(ErrorCodes.SourceRejected, $"{pg.MessageText} (SQLSTATE {pg.SqlState})", pg),
 

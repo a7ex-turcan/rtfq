@@ -135,8 +135,14 @@ public sealed class OfflineDescribeTests : IAsyncLifetime
         Assert.Contains(afterTable.Columns, c => c.Name == "customer" && c.Type == "text");
 
         // An agent can draft a correct statement offline; it just cannot run one.
+        //
+        // Stopping a container leaves a window where PostgreSQL still answers, with
+        // a FATAL shutdown error rather than a refused connection. Both are the
+        // source being unavailable, and both must classify that way — telling the
+        // caller its statement was rejected would send it debugging valid SQL.
         var ex = await Assert.ThrowsAsync<RtfqClientException>(
             () => client.QueryAsync("orders", "SELECT id FROM orders"));
+
         Assert.Equal(ErrorCodes.SourceUnreachable, ex.Code);
     }
 
