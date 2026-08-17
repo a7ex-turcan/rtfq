@@ -360,6 +360,34 @@ public sealed class MongoAdapter : ISourceAdapter
         }
     }
 
+    public GuardedStatement Classify(string statement)
+    {
+        var guarded = MongoReadGuard.Prepare(statement, maxRows: null);
+        return new GuardedStatement
+        {
+            Kind = StatementKind.Read,
+            Statement = statement,
+            Target = guarded.Collection,
+            Referenced = [guarded.Collection],
+        };
+    }
+
+    /// <summary>
+    /// Not yet. Mongo transactions need a replica set — which
+    /// <see cref="CheckAsync"/> already establishes and startup already enforces —
+    /// but the write path itself is deferred rather than half-built.
+    ///
+    /// The reason is the propose/commit split: it depends on holding a session
+    /// transaction open across two requests, and Mongo's session lifetime and
+    /// its own transaction timeout interact with our handle TTL in ways that need
+    /// their own adversarial suite. Shipping the mechanism without that suite
+    /// would be shipping the appearance of a gate.
+    /// </summary>
+    public Task<IMutationTransaction> BeginMutationAsync(
+        GuardedStatement statement, MutationOptions options, CancellationToken cancellationToken) =>
+        throw new AdapterException(ErrorCodes.InsufficientAccess,
+            "refused: MongoDB writes are not implemented yet; PostgreSQL and SQL Server have the write path");
+
     string DefaultDatabase() =>
         _databases.Length > 0
             ? _databases[0]

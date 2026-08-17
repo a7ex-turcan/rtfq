@@ -89,4 +89,22 @@ public interface ISourceAdapter : IAsyncDisposable
     /// than accepting one, so no caller can reach ANALYZE.
     /// </summary>
     Task<string> ExplainAsync(string statement, TimeSpan timeout, CancellationToken cancellationToken);
+
+    /// <summary>
+    /// Parses and classifies a statement without running it, so the gates above
+    /// can decide before anything opens a transaction.
+    /// </summary>
+    /// <exception cref="AdapterException">The statement is refused outright.</exception>
+    GuardedStatement Classify(string statement);
+
+    /// <summary>
+    /// Runs a mutation inside a transaction and leaves it <b>uncommitted</b>.
+    /// Capturing before-images and reading the real affected-row count both
+    /// happen inside that transaction.
+    /// </summary>
+    /// <exception cref="AdapterException">
+    /// The source cannot do transactional writes, or the statement failed.
+    /// </exception>
+    Task<IMutationTransaction> BeginMutationAsync(
+        GuardedStatement statement, MutationOptions options, CancellationToken cancellationToken);
 }

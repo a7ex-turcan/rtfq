@@ -141,6 +141,52 @@ public static class Render
 
     public static string Plan(ExplainResponse response) => response.Plan;
 
+    /// <summary>
+    /// Renders an uncommitted proposal.
+    ///
+    /// The diff leads and the handle follows, because the point of this step is
+    /// that a human or an agent looks at what changed before deciding. Presenting
+    /// the handle first would invite committing without reading.
+    /// </summary>
+    public static string Proposal(ProposeWriteResponse response)
+    {
+        var sb = new StringBuilder();
+
+        sb.Append("NOT COMMITTED. ").Append(response.Kind).Append(" on ").Append(response.Target);
+        if (response.AffectedRows is { } rows) sb.Append(" would change ").Append(rows).Append(" row(s)");
+        sb.AppendLine();
+
+        if (response.SchemaSummary is { } summary) sb.Append("change: ").AppendLine(summary);
+
+        if (response.DiffSample.Count > 0)
+        {
+            sb.AppendLine("rows as they are now:");
+            sb.AppendLine(string.Join(" | ", response.DiffColumns.Select(c => c.Name)));
+            foreach (var row in response.DiffSample)
+            {
+                var values = row is JsonArray array
+                    ? array.Select(cell => Shorten(cell?.ToString() ?? "NULL", 60))
+                    : [];
+                sb.AppendLine(string.Join(" | ", values));
+            }
+        }
+        else if (response.AffectedRows is > 0)
+        {
+            sb.AppendLine("(no prior rows: this statement only adds)");
+        }
+
+        sb.Append("handle: ").AppendLine(response.Handle);
+        sb.Append("statement fingerprint: ").AppendLine(response.Fingerprint);
+        if (response.Hint is { } hint) sb.AppendLine(hint);
+
+        return sb.ToString().TrimEnd();
+    }
+
+    public static string Settlement(SettleWriteResponse response) =>
+        response.AffectedRows is { } rows
+            ? $"{response.Outcome}: {rows} row(s)"
+            : response.Outcome;
+
     // --- helpers -----------------------------------------------------------
 
     /// <summary>

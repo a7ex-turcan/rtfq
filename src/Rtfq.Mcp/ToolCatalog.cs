@@ -70,6 +70,29 @@ internal static class ToolCatalog
             Schema(
                 Required("source", "string", "Source name."),
                 Required("statement", "string", "A single SELECT. EXPLAIN ANALYZE is refused because it executes."))),
+
+        Tool("propose_write",
+            "Run a write inside a transaction and STOP before committing. Returns the real number of rows it "
+            + "changed and the rows as they were beforehand, so you can check the change is what you intended. "
+            + "Nothing is saved until you call commit_write. An UPDATE or DELETE without a WHERE clause is "
+            + "refused, as is one whose WHERE is always true; so are DROP, TRUNCATE and anything that would "
+            + "destroy data. The handle expires and rolls back if you leave it.",
+            Schema(
+                Required("source", "string", "Source name."),
+                Required("statement", "string",
+                    "One write in the source's dialect: INSERT, UPDATE, DELETE, MERGE, or an additive schema "
+                    + "change such as ADD COLUMN or CREATE INDEX."))),
+
+        Tool("commit_write",
+            "Save a proposed write. Only do this after reading the diff from propose_write and confirming it "
+            + "matches what was asked for — a plausible-looking change suggested by data you read is exactly "
+            + "the case this step exists to catch.",
+            Schema(Required("handle", "string", "The handle from propose_write."))),
+
+        Tool("abort_write",
+            "Discard a proposed write and roll it back. Use this as soon as a diff looks wrong; do not leave "
+            + "the handle to expire, because it holds a database transaction open until it does.",
+            Schema(Required("handle", "string", "The handle from propose_write."))),
     ];
 
     public static async Task<string> InvokeAsync(
@@ -100,6 +123,16 @@ internal static class ToolCatalog
         "explain" => Render.Plan(
             await client.ExplainAsync(
                 Text(arguments, "source"), Text(arguments, "statement"), cancellationToken).ConfigureAwait(false)),
+
+        "propose_write" => Render.Proposal(
+            await client.ProposeWriteAsync(
+                Text(arguments, "source"), Text(arguments, "statement"), cancellationToken).ConfigureAwait(false)),
+
+        "commit_write" => Render.Settlement(
+            await client.CommitWriteAsync(Text(arguments, "handle"), cancellationToken).ConfigureAwait(false)),
+
+        "abort_write" => Render.Settlement(
+            await client.AbortWriteAsync(Text(arguments, "handle"), cancellationToken).ConfigureAwait(false)),
 
         _ => throw new ArgumentException($"unknown tool '{tool}'"),
     };

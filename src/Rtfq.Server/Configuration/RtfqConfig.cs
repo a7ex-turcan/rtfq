@@ -74,6 +74,33 @@ public sealed record SourceSection
     /// <summary>MongoDB: databases to introspect. Empty means every non-system database.</summary>
     public IReadOnlyList<string> Databases { get; init; } = [];
 
+    // --- the write path -----------------------------------------------------
+
+    /// <summary>
+    /// Targets this source will accept mutations against. **Empty means nothing
+    /// is writable**, whatever <see cref="Access"/> says — an absent allow-list is
+    /// absent, not permissive. Entries are schema-qualified and compared exactly:
+    /// <c>"Orders"</c> and <c>orders</c> are different tables.
+    /// </summary>
+    public IReadOnlyList<string> WritableTables { get; init; } = [];
+
+    /// <summary>
+    /// Targets refused outright, for reads as well as writes. Supports a trailing
+    /// <c>*</c>. Deny beats allow, always.
+    /// </summary>
+    public IReadOnlyList<string> DenyTables { get; init; } = [];
+
+    /// <summary>
+    /// Blocks the commit until a human approves. Until M4 there is no approver, so
+    /// this refuses the commit outright rather than pretending to queue it.
+    /// </summary>
+    public bool RequireApproval { get; init; }
+
+    /// <summary>Per-source override of the affected-row cap.</summary>
+    public int? MaxAffectedRows { get; init; }
+
+    public int EffectiveMaxAffectedRows(DefaultsSection d) => MaxAffectedRows ?? d.MaxAffectedRows;
+
     // --- HTTP sources -------------------------------------------------------
 
     public string BaseUrl { get; init; } = "";

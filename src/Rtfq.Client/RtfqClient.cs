@@ -111,6 +111,29 @@ public sealed class RtfqClient : IDisposable
         return await ReadAsync(response, RtfqJson.Default.ExplainResponse, cancellationToken).ConfigureAwait(false);
     }
 
+    public async Task<ProposeWriteResponse> ProposeWriteAsync(
+        string source, string statement, CancellationToken cancellationToken = default)
+    {
+        var request = new ProposeWriteRequest { Source = source, Statement = statement };
+        using var response = await _http.PostAsJsonAsync(
+            "/v1/write/propose", request, RtfqJson.Default.ProposeWriteRequest, cancellationToken).ConfigureAwait(false);
+        return await ReadAsync(response, RtfqJson.Default.ProposeWriteResponse, cancellationToken).ConfigureAwait(false);
+    }
+
+    public Task<SettleWriteResponse> CommitWriteAsync(string handle, CancellationToken cancellationToken = default) =>
+        SettleAsync("/v1/write/commit", handle, cancellationToken);
+
+    public Task<SettleWriteResponse> AbortWriteAsync(string handle, CancellationToken cancellationToken = default) =>
+        SettleAsync("/v1/write/abort", handle, cancellationToken);
+
+    async Task<SettleWriteResponse> SettleAsync(string path, string handle, CancellationToken cancellationToken)
+    {
+        var request = new SettleWriteRequest { Handle = handle };
+        using var response = await _http.PostAsJsonAsync(
+            path, request, RtfqJson.Default.SettleWriteRequest, cancellationToken).ConfigureAwait(false);
+        return await ReadAsync(response, RtfqJson.Default.SettleWriteResponse, cancellationToken).ConfigureAwait(false);
+    }
+
     public async Task<HealthResponse> HealthAsync(CancellationToken cancellationToken = default)
     {
         using var response = await _http.GetAsync("/health", cancellationToken).ConfigureAwait(false);

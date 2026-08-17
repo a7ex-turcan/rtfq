@@ -149,6 +149,30 @@ public sealed class HttpAdapter : ISourceAdapter
     public Task<string> ExplainAsync(string statement, TimeSpan timeout, CancellationToken cancellationToken) =>
         throw new AdapterException(ErrorCodes.SourceRejected, "an HTTP source has no query plan to explain");
 
+    public GuardedStatement Classify(string statement)
+    {
+        var (method, path) = ParseRequestLine(statement);
+        return new GuardedStatement
+        {
+            Kind = method is "GET" or "HEAD" ? StatementKind.Read : StatementKind.Mutation,
+            Statement = statement,
+            Target = path.Split('?')[0],
+            Referenced = [path.Split('?')[0]],
+        };
+    }
+
+    /// <summary>
+    /// Never. An HTTP API has no transaction to leave open, so there is no way to
+    /// show a caller what a change did before deciding whether to keep it — and
+    /// the propose/commit split is the whole safety mechanism, not a formality.
+    /// Config validation refuses <c>access: write</c> on an HTTP source for the
+    /// same reason; this is the backstop.
+    /// </summary>
+    public Task<IMutationTransaction> BeginMutationAsync(
+        GuardedStatement statement, MutationOptions options, CancellationToken cancellationToken) =>
+        throw new AdapterException(ErrorCodes.InsufficientAccess,
+            "refused: an HTTP source has no transactions, so a change could not be rolled back after you saw it");
+
     static (string Method, string Path) ParseRequestLine(string statement)
     {
         var trimmed = statement.Trim();

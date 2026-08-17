@@ -17,6 +17,16 @@ public sealed record AuditEntry
     public int? RowCount { get; init; }
     public bool? Truncated { get; init; }
     public long ElapsedMs { get; init; }
+
+    /// <summary>
+    /// The affected rows as they were before a mutation, serialized. Not a true
+    /// undo, but the artifact a human works from at 3am — which is why it is
+    /// written at propose time, before anything is committed.
+    /// </summary>
+    public string? BeforeImages { get; init; }
+
+    /// <summary>What a schema change did, for changes that have no rows to journal.</summary>
+    public string? SchemaSummary { get; init; }
 }
 
 /// <summary>
@@ -64,6 +74,16 @@ public sealed class AuditLog : IDisposable
             WriteIfPresent(w, "error_code", entry.ErrorCode);
             if (entry.RowCount is { } rows) w.WriteNumber("row_count", rows);
             if (entry.Truncated is { } truncated) w.WriteBoolean("truncated", truncated);
+            WriteIfPresent(w, "schema_summary", entry.SchemaSummary);
+
+            // Written as raw JSON rather than an escaped string, so the journal
+            // stays greppable and a recovery script can read it directly.
+            if (!string.IsNullOrEmpty(entry.BeforeImages))
+            {
+                w.WritePropertyName("before_images");
+                w.WriteRawValue(entry.BeforeImages);
+            }
+
             w.WriteNumber("elapsed_ms", entry.ElapsedMs);
             w.WriteEndObject();
         }

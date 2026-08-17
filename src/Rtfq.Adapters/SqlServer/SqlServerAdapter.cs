@@ -302,6 +302,22 @@ public sealed class SqlServerAdapter : ISourceAdapter
         return new ReadResult(columns, rows, rows.Count, truncated);
     }
 
+    public GuardedStatement Classify(string statement) => SqlServerWriteGuard.Prepare(statement, maxRows: null);
+
+    public async Task<IMutationTransaction> BeginMutationAsync(
+        GuardedStatement statement, MutationOptions options, CancellationToken cancellationToken)
+    {
+        try
+        {
+            return await SqlServerMutation.BeginAsync(_connectionString, statement, options, cancellationToken)
+                .ConfigureAwait(false);
+        }
+        catch (Exception ex)
+        {
+            throw Translate(ex);
+        }
+    }
+
     public async Task<string> ExplainAsync(string statement, TimeSpan timeout, CancellationToken cancellationToken)
     {
         var guarded = SqlServerReadGuard.Prepare(statement, maxRows: null);

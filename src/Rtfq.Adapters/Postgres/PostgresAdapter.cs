@@ -337,6 +337,22 @@ public sealed class PostgresAdapter : ISourceAdapter
         return new ReadResult(columns, rows, rows.Count, truncated);
     }
 
+    public GuardedStatement Classify(string statement) => PostgresWriteGuard.Prepare(statement, maxRows: null);
+
+    public async Task<IMutationTransaction> BeginMutationAsync(
+        GuardedStatement statement, MutationOptions options, CancellationToken cancellationToken)
+    {
+        try
+        {
+            return await PostgresMutation.BeginAsync(_dataSource, statement, options, cancellationToken)
+                .ConfigureAwait(false);
+        }
+        catch (Exception ex)
+        {
+            throw Translate(ex);
+        }
+    }
+
     public async Task<string> ExplainAsync(string statement, TimeSpan timeout, CancellationToken cancellationToken)
     {
         // Validate without injecting: a LIMIT the caller did not write would

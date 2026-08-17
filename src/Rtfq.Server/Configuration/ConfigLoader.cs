@@ -230,9 +230,11 @@ public static class ConfigLoader
                 headerMap.MarkAllUsed();
             }
 
-            // Consume keys that later milestones own, so a config written against
-            // the documented shape is not rejected before its phase arrives.
-            s.Reserve("require_approval", "max_affected_rows", "deny_tables", "writable_tables");
+            var writableTables = s.StringList("writable_tables");
+            var denyTables = s.StringList("deny_tables");
+            var maxAffected = s.NullableInt("max_affected_rows", diags);
+            var requireApproval = string.Equals(s.RawScalar("require_approval"), "true", StringComparison.OrdinalIgnoreCase);
+
             s.ReportUnknownKeys();
 
             if (string.IsNullOrEmpty(name))
@@ -258,6 +260,10 @@ public static class ConfigLoader
                 AllowPaths = allowPaths,
                 Headers = headers,
                 HeadersHadInlineSecret = headersInline,
+                WritableTables = writableTables,
+                DenyTables = denyTables,
+                MaxAffectedRows = maxAffected,
+                RequireApproval = requireApproval,
             });
         }
 

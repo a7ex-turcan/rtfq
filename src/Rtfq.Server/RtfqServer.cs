@@ -66,6 +66,10 @@ public sealed class RtfqServer : IAsyncDisposable
         builder.Services.AddSingleton(sources);
         builder.Services.AddSingleton(new PolicyEngine(config));
         builder.Services.AddSingleton(new TokenAuthenticator(config));
+        builder.Services.AddSingleton(provider => new Broker.MutationBroker(
+            config, sources, audit,
+            provider.GetRequiredService<ILogger<Broker.MutationBroker>>(),
+            startSweeper: true));
         builder.Services.AddSingleton(provider => new SchemaCache(
             stateDirectory,
             config.Defaults.SchemaCacheTtl,

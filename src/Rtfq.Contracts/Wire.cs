@@ -144,6 +144,58 @@ public sealed record SampleRequest
     public int? Rows { get; init; }
 }
 
+public sealed record ProposeWriteRequest
+{
+    public required string Source { get; init; }
+    public required string Statement { get; init; }
+}
+
+/// <summary>
+/// A mutation that has run inside a transaction and is <b>not committed</b>.
+///
+/// The agent is structurally forced to look before it leaps: it cannot reach a
+/// committed change without first receiving this and deciding on it.
+/// </summary>
+public sealed record ProposeWriteResponse
+{
+    public required string Handle { get; init; }
+    public required string Source { get; init; }
+
+    /// <summary>mutation or schema.</summary>
+    public required string Kind { get; init; }
+    public required string Target { get; init; }
+
+    /// <summary>The driver's real count from the uncommitted execution. Null for a schema change.</summary>
+    public int? AffectedRows { get; init; }
+
+    /// <summary>Columns of <see cref="DiffSample"/>.</summary>
+    public required List<ColumnInfo> DiffColumns { get; init; }
+
+    /// <summary>The affected rows as they were <i>before</i> the statement ran.</summary>
+    public required JsonArray DiffSample { get; init; }
+
+    public required bool RequiresApproval { get; init; }
+    public required string ExpiresAt { get; init; }
+
+    /// <summary>Hash of the statement this handle came from, so a caller can confirm what it is committing.</summary>
+    public required string Fingerprint { get; init; }
+
+    public string? SchemaSummary { get; init; }
+    public string? Hint { get; init; }
+}
+
+public sealed record SettleWriteRequest
+{
+    public required string Handle { get; init; }
+}
+
+public sealed record SettleWriteResponse
+{
+    public required string Handle { get; init; }
+    public required string Outcome { get; init; }
+    public int? AffectedRows { get; init; }
+}
+
 public sealed record SourceInfo
 {
     public required string Name { get; init; }
@@ -176,6 +228,10 @@ public sealed record HealthResponse(string Status, string Version);
 [JsonSerializable(typeof(ExplainRequest))]
 [JsonSerializable(typeof(ExplainResponse))]
 [JsonSerializable(typeof(SampleRequest))]
+[JsonSerializable(typeof(ProposeWriteRequest))]
+[JsonSerializable(typeof(ProposeWriteResponse))]
+[JsonSerializable(typeof(SettleWriteRequest))]
+[JsonSerializable(typeof(SettleWriteResponse))]
 [JsonSerializable(typeof(JsonArray))]
 [JsonSourceGenerationOptions(
     PropertyNamingPolicy = JsonKnownNamingPolicy.SnakeCaseLower,

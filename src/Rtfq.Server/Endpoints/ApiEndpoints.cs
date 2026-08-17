@@ -3,6 +3,7 @@ using Microsoft.AspNetCore.Http;
 using Microsoft.Extensions.DependencyInjection;
 using Rtfq.Adapters;
 using Rtfq.Contracts;
+using Rtfq.Server.Broker;
 using Rtfq.Server.Configuration;
 using Rtfq.Server.Policy;
 using Rtfq.Server.Schema;
@@ -43,6 +44,136 @@ internal static class ApiEndpoints
         app.MapPost("/v1/query", Query);
         app.MapPost("/v1/sample", Sample);
         app.MapPost("/v1/explain", Explain);
+        app.MapPost("/v1/write/propose", ProposeWrite);
+        app.MapPost("/v1/write/commit", CommitWrite);
+        app.MapPost("/v1/write/abort", AbortWrite);
+    }
+
+    // --- the write path ------------------------------------------------------
+
+    static async Task ProposeWrite(HttpContext ctx)
+    {
+        var scope = RequestScope.Begin(ctx, "propose_write");
+        var caller = await scope.AuthenticateAsync().ConfigureAwait(false);
+        if (caller is null) return;
+
+        var body = await scope.ReadBodyAsync(RtfqJson.Default.ProposeWriteRequest).ConfigureAwait(false);
+        if (body is null) return;
+
+        if (string.IsNullOrWhiteSpace(body.Source) || string.IsNullOrWhiteSpace(body.Statement))
+        {
+            await scope.Refuse(StatusCodes.Status400BadRequest, ErrorCodes.RequestMalformed,
+                "body must be {\"source\": \"...\", \"statement\": \"...\"}").ConfigureAwait(false);
+            return;
+        }
+
+        var config = ctx.RequestServices.GetRequiredService<RtfqConfig>();
+        var source = config.FindSource(body.Source);
+
+        // Gates one and two: the source declares write, and this token was granted
+        // it. Both must hold before the statement is even parsed, and the
+        // effective level is the intersection of the two — which is why enabling a
+        // write always takes edits in two places.
+        var required = RequiredAccess(source, body.Statement, ctx);
+        if (!await scope.AuthoriseAsync(caller, body.Source, required).ConfigureAwait(false)) return;
+
+        try
+        {
+            var broker = ctx.RequestServices.GetRequiredService<MutationBroker>();
+            var proposal = await broker.ProposeAsync(caller, source!, body.Statement, ctx.RequestAborted)
+                .ConfigureAwait(false);
+
+            await scope.Ok(new ProposeWriteResponse
+            {
+                Handle = proposal.Handle,
+                Source = proposal.Source,
+                Kind = proposal.Kind == StatementKind.Schema ? "schema" : "mutation",
+                Target = proposal.Target,
+                AffectedRows = proposal.AffectedRows,
+                DiffColumns = proposal.DiffColumns,
+                DiffSample = proposal.DiffSample,
+                RequiresApproval = proposal.RequiresApproval,
+                ExpiresAt = proposal.ExpiresAt.ToString("O"),
+                Fingerprint = proposal.Fingerprint,
+                SchemaSummary = proposal.SchemaSummary,
+                Hint = proposal.RequiresApproval
+                    ? "this source requires human approval; commit will be refused until an approver exists (M4)"
+                    : $"nothing is committed yet. Review the diff, then commit_write or abort_write before {proposal.ExpiresAt:HH:mm:ss}Z, "
+                      + "after which the handle expires and rolls back.",
+            }, RtfqJson.Default.ProposeWriteResponse, body.Source, body.Statement,
+               classification: proposal.Kind == StatementKind.Schema ? "schema" : "mutation",
+               rowCount: proposal.AffectedRows).ConfigureAwait(false);
+        }
+        catch (AdapterException ex)
+        {
+            await scope.RefuseAdapter(ex, body.Source, body.Statement).ConfigureAwait(false);
+        }
+    }
+
+    /// <summary>
+    /// A schema change needs <c>access: schema</c>; a mutation needs
+    /// <c>access: write</c>. Classified before the gates so the caller is measured
+    /// against what it is actually asking for.
+    /// </summary>
+    static AccessLevel RequiredAccess(Configuration.SourceSection? source, string statement, HttpContext ctx)
+    {
+        if (source is null) return AccessLevel.Write;
+
+        try
+        {
+            var registry = ctx.RequestServices.GetRequiredService<SourceRegistry>();
+            if (!registry.TryGet(source.Name, out var adapter)) return AccessLevel.Write;
+            return adapter.Classify(statement).Kind == StatementKind.Schema
+                ? AccessLevel.Schema
+                : AccessLevel.Write;
+        }
+        catch (AdapterException)
+        {
+            // Unparseable: ask for write, and let the guard report the real reason.
+            return AccessLevel.Write;
+        }
+    }
+
+    static Task CommitWrite(HttpContext ctx) => SettleWrite(ctx, commit: true);
+
+    static Task AbortWrite(HttpContext ctx) => SettleWrite(ctx, commit: false);
+
+    static async Task SettleWrite(HttpContext ctx, bool commit)
+    {
+        var scope = RequestScope.Begin(ctx, commit ? "commit_write" : "abort_write");
+        var caller = await scope.AuthenticateAsync().ConfigureAwait(false);
+        if (caller is null) return;
+
+        var body = await scope.ReadBodyAsync(RtfqJson.Default.SettleWriteRequest).ConfigureAwait(false);
+        if (body is null) return;
+
+        if (string.IsNullOrWhiteSpace(body.Handle))
+        {
+            await scope.Refuse(StatusCodes.Status400BadRequest, ErrorCodes.RequestMalformed,
+                "body must be {\"handle\": \"...\"}").ConfigureAwait(false);
+            return;
+        }
+
+        var broker = ctx.RequestServices.GetRequiredService<MutationBroker>();
+
+        try
+        {
+            int? affected = null;
+            if (commit) affected = await broker.CommitAsync(caller, body.Handle, ctx.RequestAborted).ConfigureAwait(false);
+            else await broker.AbortAsync(caller, body.Handle, ctx.RequestAborted).ConfigureAwait(false);
+
+            await scope.Ok(new SettleWriteResponse
+            {
+                Handle = body.Handle,
+                Outcome = commit ? "committed" : "aborted",
+                AffectedRows = affected,
+            }, RtfqJson.Default.SettleWriteResponse,
+               classification: commit ? "mutation" : "aborted", rowCount: affected).ConfigureAwait(false);
+        }
+        catch (AdapterException ex)
+        {
+            await scope.RefuseAdapter(ex).ConfigureAwait(false);
+        }
     }
 
     // --- discovery ----------------------------------------------------------
