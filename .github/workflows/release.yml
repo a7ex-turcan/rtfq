@@ -53,15 +53,45 @@ jobs:
         shell: bash
         run: echo "VERSION=${GITHUB_REF_NAME#v}" >> "$GITHUB_ENV"
 
-      - name: Install NativeAOT prerequisites
-        if: runner.os == 'Linux'
-        run: sudo apt-get update && sudo apt-get install -y clang zlib1g-dev
-
       # NativeAOT does not cross-compile across operating systems, which is why
       # this is a matrix over runners rather than a matrix over RIDs on one box.
-      - name: Publish
+
+      # Linux builds happen inside Ubuntu 22.04, because a binary links against
+      # the build host's glibc and the runner's is too new. Built on 24.04 the
+      # artifact requires GLIBC_2.38 and will not start on Debian 12, Ubuntu 22.04
+      # or RHEL 9. Jammy brings the floor to 2.34. Same path CI uses.
+      - name: Publish (Linux, old-glibc base)
+        if: runner.os == 'Linux'
+        run: |
+          docker run --rm -e VERSION -v "$PWD:/src" -w /src ubuntu:22.04 bash -c '
+            set -e
+            export DEBIAN_FRONTEND=noninteractive
+            apt-get update -qq
+            apt-get install -y -qq curl clang zlib1g-dev ca-certificates
+            curl -sSL https://dot.net/v1/dotnet-install.sh -o /tmp/di.sh
+            bash /tmp/di.sh --channel 10.0 --install-dir /usr/share/dotnet --no-path
+            export PATH=/usr/share/dotnet:$PATH DOTNET_NOLOGO=1 DOTNET_CLI_TELEMETRY_OPTOUT=1
+            dotnet publish src/Rtfq.Cli -c Release -r ${{ matrix.rid }} -p:Version="$VERSION" -o publish
+          '
+          sudo chown -R "$USER" publish
+
+      # Windows and macOS resolve globalization through the OS, and neither has
+      # the glibc question, so they build natively.
+      - name: Publish (Windows and macOS)
+        if: runner.os != 'Linux'
         shell: bash
         run: dotnet publish src/Rtfq.Cli -c Release -r ${{ matrix.rid }} -p:Version="$VERSION" -o publish
+
+      - name: The Linux artifact must run on Debian 12
+        if: runner.os == 'Linux'
+        run: |
+          ceiling=2.34
+          highest=$(objdump -T publish/rtfq | grep -oE 'GLIBC_2\.[0-9]+' | sed 's/GLIBC_//' | sort -V | tail -1)
+          echo "highest glibc symbol required: $highest (ceiling $ceiling)"
+          if [ "$(printf '%s\n%s\n' "$highest" "$ceiling" | sort -V | tail -1)" != "$ceiling" ]; then
+            echo "::error::artifact requires glibc $highest; refusing to publish it"
+            exit 1
+          fi
 
       - name: Verify the binary reports the tagged version
         shell: bash

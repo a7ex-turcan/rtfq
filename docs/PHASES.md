@@ -199,8 +199,10 @@ Writes for any adapter (M3) — including Mongo, whose transactional story is th
 - ✅ HTTP wildcard + a write method is refused, as is a wildcard anywhere but the final character.
 - ✅ Mongo schema is flagged `inferred`, and a field with more than one observed type reports all of them
   (`total double|int32`) rather than picking one.
-- ⚠ **Open, and blocking the next release:** a glibc 2.38 floor from the new dependencies, and a `libicu`
-  requirement on Linux hosts introduced by SQL Server's driver.
+- ✔ The glibc floor M2 introduced is fixed: Linux artifacts build inside Ubuntu 22.04 and target glibc 2.34,
+  which CI asserts.
+- ⚠ **Open:** Linux hosts now need `libicu` installed, because SQL Server's driver refuses invariant
+  globalization. Documented in the README; `StaticICULinking` would remove it and does not currently build.
 
 ### Risks and decisions
 

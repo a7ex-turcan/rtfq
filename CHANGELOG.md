@@ -47,8 +47,10 @@ are called out under *Changed* rather than buried in *Fixed*.
 
 - ⚠ **Linux hosts now need `libicu` installed.** `Microsoft.Data.SqlClient` refuses to run in invariant
   globalization mode, so that setting had to be turned off. Windows and macOS are unaffected.
-- ⚠ **A glibc 2.38 floor**, introduced by the new dependencies. A binary built on a modern host will not start on
-  Debian 12, Ubuntu 22.04 or RHEL 9. **This must be fixed before the next release.**
+- Linux artifacts now target **glibc 2.34**, so Debian 12, Ubuntu 22.04 and RHEL 9 are supported. M2's new
+  dependencies had briefly raised the floor to 2.38 — enough to exclude all three — because a binary links
+  against whatever glibc built it. Linux builds now happen inside an Ubuntu 22.04 container and CI asserts the
+  ceiling, since this is the kind of thing that drifts upward without anyone noticing.
 - The binary is now ~66 MB, up from 20 MB.
 - Still reads only; the write path is M3.
 

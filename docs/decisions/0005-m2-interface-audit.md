@@ -144,12 +144,19 @@ Two of these are unwelcome and neither was foreseen.
   Fixed with `TrimmerRootAssembly` for `MongoDB.Bson` and `MongoDB.Driver`, and
   re-verified end to end: reads work, `$out` and `$where` are refused, and inferred
   schema reports `total double|int32` correctly.
-- ⚠ **A new glibc floor of 2.38**, from `fmod`/`fmodf` pulled in by the new
-  dependencies. A binary built on a glibc-2.39 host will **not start on Debian 12,
-  Ubuntu 22.04 or RHEL 9** — all common targets for a self-hosted tool. The
-  released v0.2.0 is unaffected and still runs on `debian:bookworm-slim`; this
-  arrives with M2. It must be fixed before M2 ships, by building the Linux
-  artifacts on an older runner. **Not yet done, and it blocks the next release.**
+- ✔ **A new glibc floor of 2.38 — found and fixed.** `fmod`/`fmodf` came in with
+  the new dependencies, and a binary links against the glibc that built it, so
+  building on the 24.04 runner produced an artifact that **would not start on
+  Debian 12, Ubuntu 22.04 or RHEL 9**.
+
+  Fixed by building the Linux artifacts inside an Ubuntu 22.04 container, which
+  brings the floor to **2.34** — low enough for RHEL 9, the oldest of the three.
+  Verified by running the result on Debian 12 and Ubuntu 22.04. CI asserts the
+  ceiling and uses the same build path as the release, so the artifact tested is
+  the artifact shipped.
+
+  A musl build would have removed the question entirely, but `Npgquery` ships
+  glibc-linked native libraries, so it is not available.
 - **Six dependencies are not AOT-clean**, not one as first assumed:
   `Microsoft.Data.SqlClient` and its logging assembly, `ScriptDom`, `MongoDB.Bson`,
   `MongoDB.Driver` and `System.Configuration.ConfigurationManager`. ScriptDom is

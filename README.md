@@ -39,6 +39,14 @@ tar -xzf rtfq-0.1.0-linux-x64.tar.gz && cd rtfq-0.1.0-linux-x64
 Verify against `SHA256SUMS`, published with each release. Intel Macs and Windows on ARM are not built — see
 [CHANGELOG.md](CHANGELOG.md) for why that is a decision rather than an oversight.
 
+**Linux prerequisites.** The bundle needs `libicu` on the host — `apt install libicu72` or
+`dnf install libicu`. Most server images already have it; minimal containers do not. This is not optional:
+the SQL Server driver refuses to run without globalization support, so the binary aborts at the first query
+rather than degrading. Windows and macOS need nothing extra.
+
+Linux builds target **glibc 2.34**, so Debian 12, Ubuntu 22.04 and RHEL 9 are all supported. That floor is
+asserted in CI, because it is set by whichever host compiles the binary and drifts upward silently.
+
 ## Try it
 
 ```bash
