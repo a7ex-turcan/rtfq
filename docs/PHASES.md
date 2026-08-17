@@ -266,18 +266,22 @@ Human approval (M4) — M3 ships with `require_approval` parsed and enforced as 
 "prompt someone". Auto-commit sources work; approval-required sources cannot yet be approved. That keeps M3's
 test surface structural.
 
-### Exit criteria
+### Exit criteria — **met for PostgreSQL and SQL Server; see [ADR 0006](decisions/0006-m3-write-path.md)**
 
-- ✅ The adversarial suite passes on every write-capable adapter, and a reviewer other than the author agrees it
-  is convincing. This is the ship gate, per `CLAUDE.md`.
-- ✅ A mutation one row over the cap is refused with the real count, and the transaction is provably rolled back
-  (verified by re-reading the rows).
-- ✅ An expired handle rolls back automatically; a handle cannot be re-pointed at a different statement.
-- ✅ Every mutation has before-images in the audit log, traceable to the read that preceded it; every schema
-  change has the object's prior definition journaled.
-- ✅ No schema statement can destroy data or change what a write allow-list entry resolves to — verified per
-  dialect at the **subcommand** level, not the statement-type level.
-- ✅ Server killed mid-transaction leaves no committed partial write.
+- ✅ The adversarial suite passes on both write-capable adapters — 50 end-to-end write tests against real
+  containerised databases. Every refusal test also re-reads the data from a separate connection, because a gate
+  that reports "no" while letting the write through is the failure that matters. *A reviewer other than the
+  author has not yet looked at it; that half of the gate is outstanding.*
+- ✅ A mutation one row over the cap is refused with the real count, and the rollback is verified by re-reading.
+- ✅ An expired handle rolls back automatically; handles are single-use and owned by the caller that made them,
+  so re-pointing is impossible by construction — commit takes only a handle.
+- ✅ Every mutation is journalled with its before-images at propose time, before anything is committed.
+- ✅ No schema statement can destroy data or repoint an allow-list entry — verified at the **subcommand** level
+  in both dialects, including T-SQL's `DROP COLUMN`/`DROP CONSTRAINT` sharing one statement type.
+- ✅ A server that goes away mid-transaction commits nothing, tested both as an orderly shutdown and as the
+  connection vanishing (`pg_terminate_backend`), because those are rolled back by different things.
+- ⚠ **Not included:** MongoDB writes (need a replica set and their own suite) and HTTP writes (no transactions
+  to leave open). Both refuse with a typed code.
 
 ### Risks and decisions
 

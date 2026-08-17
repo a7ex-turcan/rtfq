@@ -11,7 +11,43 @@ are called out under *Changed* rather than buried in *Fixed*.
 
 ## [Unreleased]
 
-Nothing yet. Next up is M3: the write path.
+**M3 — the write path**, for PostgreSQL and SQL Server. See
+[ADR 0006](docs/decisions/0006-m3-write-path.md).
+
+### Added
+
+- **`propose_write`, `commit_write`, `abort_write`** on the HTTP API and as MCP tools. A proposal runs the
+  statement inside a transaction and stops: it reports the real number of rows changed and the rows as they were
+  beforehand, and nothing is saved until it is committed.
+- **The four structural gates** — source access, token grant, target allow-list, statement guard — each with its
+  own refusal code. `writable_tables`, `deny_tables`, `max_affected_rows` and `require_approval` per source.
+- **Before-image journaling.** The affected rows are captured inside the same transaction, at repeatable read so
+  the capture and the mutation see the same rows, and written to the audit log at propose time.
+- **Additive schema changes** per [ADR 0002](docs/decisions/0002-ddl-additive-and-corrective.md), gated at the
+  subcommand level and requiring `access: schema`.
+
+### Security
+
+- The affected-row cap is enforced against the driver's **real count from the uncommitted execution**, never an
+  estimate. One row over rolls back and refuses with the count.
+- Unqualified `UPDATE`/`DELETE` are refused, and so are trivially-true predicates (`WHERE 1=1`, `WHERE true`,
+  `… OR true`) — a `WHERE`-presence test is not enough.
+- Deny rules apply to everything a statement touches, so a write to an allowed table that reads a denied one
+  through a subquery is refused.
+- Handles are single-use, owned by their creator, capped at four open per source, and roll back on abort, on
+  expiry, and on shutdown.
+- A write nested inside another statement — a `DELETE` in a CTE — is refused: it has no unambiguous target, so
+  the allow-list and the cap would be guessing.
+
+### Known gaps
+
+- **MongoDB and HTTP writes are refused.** Mongo needs a replica set and its own adversarial suite; HTTP has no
+  transaction to leave open.
+- **`require_approval` refuses the commit** rather than queuing it. There is no approver until M4.
+- **On SQL Server an open proposal blocks readers** of the affected rows, where PostgreSQL shows them the
+  pre-image. Enable `READ_COMMITTED_SNAPSHOT`, and treat the handle TTL as an availability control there.
+- The unbounded-statement pre-check is still not implemented; an uncommitted runaway does its work before being
+  rolled back, bounded only by `statement_timeout` and `lock_timeout`.
 
 ## [0.3.0] - 2026-08-17
 
