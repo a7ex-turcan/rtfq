@@ -11,6 +11,10 @@ are called out under *Changed* rather than buried in *Fixed*.
 
 ## [Unreleased]
 
+Nothing yet. Next up is M4: human approval, the control that closes the prompt-injection story.
+
+## [0.4.0] - 2026-08-17
+
 **M3 — the write path**, for PostgreSQL and SQL Server. See
 [ADR 0006](docs/decisions/0006-m3-write-path.md).
 
@@ -188,7 +192,8 @@ wire protocol, capped and audited. Thin, but nothing in it is a placeholder.
   osx-x64 native payload, so shipping the artifact now would mean withdrawing it later. See
   [ADR 0001](docs/decisions/0001-sql-parser-selection.md). No win-arm64 build either.
 
-[Unreleased]: https://github.com/a7ex-turcan/rtfq/compare/v0.3.0...HEAD
+[Unreleased]: https://github.com/a7ex-turcan/rtfq/compare/v0.4.0...HEAD
+[0.4.0]: https://github.com/a7ex-turcan/rtfq/releases/tag/v0.4.0
 [0.3.0]: https://github.com/a7ex-turcan/rtfq/releases/tag/v0.3.0
 [0.2.0]: https://github.com/a7ex-turcan/rtfq/releases/tag/v0.2.0
 [0.1.0]: https://github.com/a7ex-turcan/rtfq/releases/tag/v0.1.0
