@@ -313,14 +313,23 @@ malicious write — not a nicety.
 
 Slack. It stays behind the same interface and out of core, per `CLAUDE.md`.
 
-### Exit criteria
+### Exit criteria — **all met** ([ADR 0007](decisions/0007-m4-approval-and-unlock.md))
 
 - ✅ An approval-required source blocks commit, surfaces statement + diff to a human, and commits only after
   explicit approval — with the decision and approver in the audit log.
 - ✅ Denial rolls back. Expiry rolls back. Neither leaves a handle alive.
 - ✅ A second provider implementation (even a trivial one) can be swapped in without touching the broker — the
-  proof that the seam is real.
+  proof that the seam is real. `WebhookApprovalProvider` ships alongside the local one and is selected by config.
 - ✅ `unlock` expires on schedule and on restart.
+
+**How the TTL question resolved.** Scope item 3 asked whether a pending approval extends the handle TTL or races
+expiry. Neither, in the end: an approval-required handle holds no resources, so it takes a longer TTL from the
+start (`approval_ttl`, default 10m) rather than a sliding one. Nothing to keep alive means nothing to renew.
+
+**What the dogfood caught**, none of which the JIT suite could have: a stale MCP hint telling agents commit would
+be refused "until an approver exists (M4)"; `describe_table` hard-coding `writable: false` since before M3; and
+the HTTP adapter still promising writes that are not coming. All three were the API lying to an agent about what
+it could do — the failure mode this project is least able to afford.
 
 ### Risks and decisions
 

@@ -26,6 +26,7 @@ public static class ConfigValidator
         ValidateListenAndTls(config, production, d);
         ValidateAuth(config, production, d);
         ValidateSources(config, production, d);
+        ValidateApproval(config, production, d);
 
         return new ValidationResult(d);
     }
@@ -106,6 +107,66 @@ public static class ConfigValidator
                         $"token '{token.Id}' is granted on '{sourceName}', which is not a declared source",
                         $"{path}.grants.{sourceName}"));
             }
+        }
+    }
+
+    /// <summary>
+    /// An approval provider that cannot be reached approves nothing, so a
+    /// misconfigured one must be caught here rather than at the moment somebody
+    /// is waiting on it.
+    /// </summary>
+    static void ValidateApproval(RtfqConfig config, bool production, List<Diagnostic> d)
+    {
+        var a = config.Approval;
+        var requiresApproval = config.Sources.Any(s => s.RequireApproval);
+
+        if (string.Equals(a.Mode, "local", StringComparison.Ordinal))
+        {
+            if (a.Endpoint.Length > 0)
+                d.Add(new("approval.endpoint_ignored", Severity.Warning,
+                    "'approval.endpoint' is set but mode is local, so it is ignored", "approval.endpoint"));
+            return;
+        }
+
+        if (!string.Equals(a.Mode, "webhook", StringComparison.Ordinal))
+        {
+            d.Add(new("approval.mode_unknown", Severity.Error,
+                $"approval mode '{a.Mode}' must be local or webhook", "approval.mode"));
+            return;
+        }
+
+        if (a.Endpoint.Length == 0)
+        {
+            d.Add(new("approval.endpoint_missing", Severity.Error,
+                "webhook approval needs an 'approval.endpoint'", "approval.endpoint"));
+        }
+        else if (!Uri.TryCreate(a.Endpoint, UriKind.Absolute, out var uri) ||
+                 (uri.Scheme != "http" && uri.Scheme != "https"))
+        {
+            d.Add(new("approval.endpoint_malformed", Severity.Error,
+                $"'{a.Endpoint}' is not an absolute http(s) URL", "approval.endpoint"));
+        }
+        else if (uri.Scheme == "http" && production)
+        {
+            // The reply to this call decides whether a write happens. In the
+            // clear, anyone on the path can be the approver.
+            d.Add(new("approval.tls_in_production", Severity.Error,
+                "the approval endpoint talks plain HTTP; production requires https", "approval.endpoint"));
+        }
+
+        if (a.HeadersHadInlineSecret)
+        {
+            d.Add(new("approval.header_inline_secret",
+                production ? Severity.Error : Severity.Warning,
+                "approval headers are written into the file; use env: or file: references instead",
+                "approval.headers"));
+        }
+
+        if (!requiresApproval)
+        {
+            d.Add(new("approval.unused", Severity.Warning,
+                "webhook approval is configured but no source sets require_approval, so it is never called",
+                "approval.mode"));
         }
     }
 

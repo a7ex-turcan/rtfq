@@ -25,12 +25,14 @@ public sealed class RtfqServer : IAsyncDisposable
     readonly WebApplication _app;
     readonly SourceRegistry _sources;
     readonly AuditLog _audit;
+    readonly Approval.IApprovalProvider _approvals;
 
-    RtfqServer(WebApplication app, SourceRegistry sources, AuditLog audit)
+    RtfqServer(WebApplication app, SourceRegistry sources, AuditLog audit, Approval.IApprovalProvider approvals)
     {
         _app = app;
         _sources = sources;
         _audit = audit;
+        _approvals = approvals;
     }
 
     /// <summary>The address actually bound, which matters when the config asked for port 0.</summary>
@@ -38,9 +40,15 @@ public sealed class RtfqServer : IAsyncDisposable
         _app.Services.GetRequiredService<IServer>().Features.Get<IServerAddressesFeature>()?
             .Addresses.FirstOrDefault() ?? "";
 
+    /// <param name="approvals">
+    /// Overrides the provider the config asks for. Only tests pass this; a
+    /// deployment selects its provider with the <c>approval:</c> section, and the
+    /// broker cannot tell the difference either way.
+    /// </param>
     public static async Task<RtfqServer> StartAsync(
         RtfqConfig config,
         string stateDirectory,
+        Approval.IApprovalProvider? approvals = null,
         CancellationToken cancellationToken = default)
     {
         var builder = WebApplication.CreateSlimBuilder();
@@ -66,10 +74,21 @@ public sealed class RtfqServer : IAsyncDisposable
         builder.Services.AddSingleton(sources);
         builder.Services.AddSingleton(new PolicyEngine(config));
         builder.Services.AddSingleton(new TokenAuthenticator(config));
+        var unlocks = new Policy.UnlockStore();
+        var approver = approvals ?? BuildApprovalProvider(config);
+
+        builder.Services.AddSingleton(unlocks);
+        builder.Services.AddSingleton(approver);
+
+        // Registered concretely as well, because the approval *queue* endpoints
+        // only exist for the local provider - a webhook keeps its own queue, and
+        // answering it is that service's business rather than ours.
+        if (approver is Approval.LocalApprovalProvider local) builder.Services.AddSingleton(local);
+
         builder.Services.AddSingleton(provider => new Broker.MutationBroker(
             config, sources, audit,
             provider.GetRequiredService<ILogger<Broker.MutationBroker>>(),
-            startSweeper: true));
+            approver, unlocks, startSweeper: true));
         builder.Services.AddSingleton(provider => new SchemaCache(
             stateDirectory,
             config.Defaults.SchemaCacheTtl,
@@ -78,11 +97,15 @@ public sealed class RtfqServer : IAsyncDisposable
 
         var app = builder.Build();
         ApiEndpoints.Map(app);
+        ApprovalEndpoints.Map(app);
+
+        app.Services.GetRequiredService<ILoggerFactory>().CreateLogger("Rtfq.Startup")
+            .LogInformation("Approvals go to the {Provider} provider", approver.Name);
 
         await CheckCapabilitiesAsync(app, config, sources, cancellationToken).ConfigureAwait(false);
 
         await app.StartAsync(cancellationToken).ConfigureAwait(false);
-        return new RtfqServer(app, sources, audit);
+        return new RtfqServer(app, sources, audit, approver);
     }
 
     /// <summary>
@@ -117,6 +140,17 @@ public sealed class RtfqServer : IAsyncDisposable
             $"refusing to start; {fatal.Count} source(s) declare access their deployment cannot support:{Environment.NewLine}{detail}");
     }
 
+    static Approval.IApprovalProvider BuildApprovalProvider(RtfqConfig config)
+    {
+        if (!string.Equals(config.Approval.Mode, "webhook", StringComparison.Ordinal))
+            return new Approval.LocalApprovalProvider(config.Defaults.ApprovalTtl);
+
+        return new Approval.WebhookApprovalProvider(
+            new Uri(config.Approval.Endpoint.EndsWith('/') ? config.Approval.Endpoint : config.Approval.Endpoint + "/"),
+            config.Approval.Timeout,
+            config.Approval.Headers);
+    }
+
     public Task WaitForShutdownAsync(CancellationToken cancellationToken = default) =>
         _app.WaitForShutdownAsync(cancellationToken);
 
@@ -139,6 +173,7 @@ public sealed class RtfqServer : IAsyncDisposable
         await _app.StopAsync().ConfigureAwait(false);
         await _app.DisposeAsync().ConfigureAwait(false);
         await _sources.DisposeAsync().ConfigureAwait(false);
+        (_approvals as IDisposable)?.Dispose();
         _audit.Dispose();
     }
 }

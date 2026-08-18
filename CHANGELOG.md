@@ -11,7 +11,50 @@ are called out under *Changed* rather than buried in *Fixed*.
 
 ## [Unreleased]
 
-Nothing yet. Next up is M4: human approval, the control that closes the prompt-injection story.
+**M4 — approval and the time-boxed unlock**, the control `CLAUDE.md` calls the central defence against a
+well-formed malicious write. See [ADR 0007](docs/decisions/0007-m4-approval-and-unlock.md).
+
+### Added
+
+- **Human approval on a commit.** A source with `require_approval: true` now queues its proposal for a person
+  instead of refusing it. The approver sees the statement and the affected rows as they are now, and nothing
+  else — there is no field in which an agent can supply a summary, because the case this gate exists for is an
+  agent persuaded by a poisoned row.
+- **`rtfq approvals`** lists what is waiting, with `--approve ID --as NAME` and `--deny ID --as NAME` to answer it.
+  The decision and the approver land in the audit log beside the exact statement.
+- **`rtfq unlock SOURCE --write --ttl 15m`** and **`rtfq lock SOURCE`**. With `require_unlock: true` a source is
+  shut at runtime even where the config permits writing, until somebody deliberately opens it. TTL is clamped to
+  an hour, expiry is evaluated on read rather than swept, and **a restart re-locks** — not configurable.
+- **A webhook approval provider**, selected with `approval: {mode: webhook, endpoint: ...}`. This is how a Slack
+  integration is built without Slack living in core: NativeAOT rules out loading plugin assemblies, so the
+  boundary is HTTP. Anything the endpoint says that is not a recognised verdict — a 500, a timeout, malformed
+  JSON, an unreachable host — is treated as *not yet decided*, never as approval.
+- `approval_ttl` in `defaults:` (10m), and the `approval:` config section, both validated by `rtfq validate`.
+
+### Changed
+
+- **An approval-required proposal holds no transaction open while a human decides.** It runs, captures the diff,
+  and rolls straight back. Commit re-runs the statement and refuses unless the diff is identical to the one that
+  was approved. Holding a transaction across a human's attention span blocks readers on SQL Server and holds back
+  `VACUUM` on PostgreSQL; a gate that expensive gets switched off.
+- `describe_table` now reports **`writable` truthfully** — the intersection of source access, token grant and the
+  write allow-list. It had been hard-coded to `false` since before M3, telling agents they could not write to
+  tables they could.
+- The MCP hint on an approval-required proposal explained that commit would be refused "until an approver exists
+  (M4)". It now says nothing is held, that `commit_write` answers `pending` until somebody decides, and when the
+  request lapses — the old text would have an agent abort instead of wait.
+- An HTTP source refusing a non-GET no longer says writes "arrive in M3". HTTP sources are read-only by design:
+  the write path needs a transaction that can capture before-images and roll back, and a request that has been
+  sent cannot be un-sent.
+
+### Security
+
+- An approval binds to **one change, not a shape of change**. The fingerprint covers the statement, the affected
+  count and the before-images, so if the rows move while somebody is deciding, the commit is refused and rolled
+  back rather than applied to data nobody approved.
+- Seeing or answering the approval queue requires a token with write access to some source. A read-only agent has
+  no business in the queue that exists to police it.
+- Opening a source requires the access being opened, and an unlock for `write` does not open `schema`.
 
 ## [0.4.0] - 2026-08-17
 

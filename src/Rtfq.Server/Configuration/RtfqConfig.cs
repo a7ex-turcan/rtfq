@@ -8,6 +8,7 @@ public sealed record RtfqConfig
     public required ServerSection Server { get; init; }
     public required DefaultsSection Defaults { get; init; }
     public required IReadOnlyList<SourceSection> Sources { get; init; }
+    public ApprovalSection Approval { get; init; } = new();
 
     public SourceSection? FindSource(string name) =>
         Sources.FirstOrDefault(s => string.Equals(s.Name, name, StringComparison.Ordinal));
@@ -56,6 +57,35 @@ public sealed record DefaultsSection
     /// flagged with its age — while a refresh runs behind the response (ADR 0003).
     /// </summary>
     public TimeSpan SchemaCacheTtl { get; init; } = TimeSpan.FromMinutes(15);
+
+    /// <summary>
+    /// How long a proposal waits on a human. Longer than the ordinary handle TTL
+    /// because a person is slower than a machine, and affordable precisely because
+    /// an approval-required proposal holds no transaction open while it waits.
+    /// </summary>
+    public TimeSpan ApprovalTtl { get; init; } = TimeSpan.FromMinutes(10);
+}
+
+/// <summary>
+/// How a human is asked. The default queues in this process and is answered with
+/// <c>rtfq approvals</c>; <c>webhook</c> hands the question to something else
+/// entirely, which is how Slack gets built without Slack living in core.
+/// </summary>
+public sealed record ApprovalSection
+{
+    /// <summary>local or webhook.</summary>
+    public string Mode { get; init; } = "local";
+
+    /// <summary>Base address of the approval service. Required when <see cref="Mode"/> is webhook.</summary>
+    public string Endpoint { get; init; } = "";
+
+    public TimeSpan Timeout { get; init; } = TimeSpan.FromSeconds(10);
+
+    /// <summary>Sent on every call — an API key for the approval service, typically.</summary>
+    public IReadOnlyDictionary<string, string> Headers { get; init; } = new Dictionary<string, string>();
+
+    /// <summary>Whether any header value was written into the file rather than referenced.</summary>
+    public bool HeadersHadInlineSecret { get; init; }
 }
 
 public sealed record SourceSection
@@ -91,13 +121,21 @@ public sealed record SourceSection
     public IReadOnlyList<string> DenyTables { get; init; } = [];
 
     /// <summary>
-    /// Blocks the commit until a human approves. Until M4 there is no approver, so
-    /// this refuses the commit outright rather than pretending to queue it.
+    /// Blocks the commit until a human approves. The proposal runs, its diff is
+    /// captured, and it rolls straight back; commit re-runs it and refuses unless
+    /// the diff still matches what was approved.
     /// </summary>
     public bool RequireApproval { get; init; }
 
     /// <summary>Per-source override of the affected-row cap.</summary>
     public int? MaxAffectedRows { get; init; }
+
+    /// <summary>
+    /// Writing requires a deliberate <c>rtfq unlock</c> first, even where access
+    /// and grants already permit it. Off by default; turning it on is how a
+    /// source says yes in principle, but not right now.
+    /// </summary>
+    public bool RequireUnlock { get; init; }
 
     public int EffectiveMaxAffectedRows(DefaultsSection d) => MaxAffectedRows ?? d.MaxAffectedRows;
 

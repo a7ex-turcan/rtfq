@@ -97,7 +97,13 @@ internal static class ApiEndpoints
                 Fingerprint = proposal.Fingerprint,
                 SchemaSummary = proposal.SchemaSummary,
                 Hint = proposal.RequiresApproval
-                    ? "this source requires human approval; commit will be refused until an approver exists (M4)"
+                    // Nothing is held while a human decides, so the honest
+                    // instruction is to wait and retry - not to abort, which is
+                    // what "will be refused" would have an agent do.
+                    ? "nothing is committed, and nothing is locked. A human has been asked to approve this exact "
+                      + $"diff. Call commit_write again to check; it answers 'pending' until somebody decides, and the "
+                      + $"request lapses at {proposal.ExpiresAt:HH:mm:ss}Z. If the rows change in the meantime the "
+                      + "approval no longer describes this change and the commit will be refused."
                     : $"nothing is committed yet. Review the diff, then commit_write or abort_write before {proposal.ExpiresAt:HH:mm:ss}Z, "
                       + "after which the handle expires and rolls back.",
             }, RtfqJson.Default.ProposeWriteResponse, body.Source, body.Statement,
@@ -158,17 +164,29 @@ internal static class ApiEndpoints
 
         try
         {
-            int? affected = null;
-            if (commit) affected = await broker.CommitAsync(caller, body.Handle, ctx.RequestAborted).ConfigureAwait(false);
-            else await broker.AbortAsync(caller, body.Handle, ctx.RequestAborted).ConfigureAwait(false);
+            if (!commit)
+            {
+                await broker.AbortAsync(caller, body.Handle, ctx.RequestAborted).ConfigureAwait(false);
+                await scope.Ok(new SettleWriteResponse { Handle = body.Handle, Outcome = "aborted" },
+                    RtfqJson.Default.SettleWriteResponse, classification: "aborted").ConfigureAwait(false);
+                return;
+            }
 
+            var result = await broker.CommitAsync(caller, body.Handle, ctx.RequestAborted).ConfigureAwait(false);
+
+            // "Still pending" is an ordinary answer, not a failure: the caller
+            // asked whether it could commit yet, and the answer is not yet.
             await scope.Ok(new SettleWriteResponse
             {
                 Handle = body.Handle,
-                Outcome = commit ? "committed" : "aborted",
-                AffectedRows = affected,
+                Outcome = result.State,
+                AffectedRows = result.AffectedRows,
+                Approver = result.Approver,
+                Hint = result.State == "pending"
+                    ? $"{result.Detail}. The handle is still valid; try commit_write again once it has been decided."
+                    : null,
             }, RtfqJson.Default.SettleWriteResponse,
-               classification: commit ? "mutation" : "aborted", rowCount: affected).ConfigureAwait(false);
+               classification: "mutation", rowCount: result.AffectedRows).ConfigureAwait(false);
         }
         catch (AdapterException ex)
         {
@@ -301,9 +319,12 @@ internal static class ApiEndpoints
             Table = table.QualifiedName,
             Kind = table.Kind,
             EstimatedRows = table.EstimatedRows,
-            // Writes arrive in M3. Reporting a hopeful true here would have an
-            // agent draft statements it cannot run.
-            Writable = false,
+            // The intersection of every gate that could still refuse, so an agent
+            // does not draft a statement it cannot run. Deliberately excludes the
+            // unlock, which is a fact about right now rather than about the table:
+            // a source that is merely locked is still writable, and saying
+            // otherwise would hide the affordance that tells someone to unlock it.
+            Writable = IsWritable(ctx, caller, name, table.QualifiedName),
             Schema = Freshness(cached),
             Columns = [.. table.Columns.Select(c => new ColumnDetail(c.Name, c.Type, c.Nullable, c.Default))],
             PrimaryKey = table.PrimaryKey,
@@ -311,6 +332,26 @@ internal static class ApiEndpoints
             ForeignKeys = [.. table.ForeignKeys.Select(f =>
                 new ForeignKeyDetail(f.Columns, f.ReferencedTable, f.ReferencedColumns))],
         }, RtfqJson.Default.DescribeTableResponse, name).ConfigureAwait(false);
+    }
+
+    /// <summary>
+    /// Every gate that would still refuse a write here, answered ahead of the
+    /// attempt so an agent does not draft a statement it cannot run.
+    ///
+    /// Deliberately excludes the time-boxed unlock, which is a fact about right
+    /// now rather than about the table. Reporting a merely locked source as
+    /// unwritable would hide the affordance that tells somebody to unlock it.
+    /// </summary>
+    static bool IsWritable(HttpContext ctx, Policy.Caller caller, string sourceName, string table)
+    {
+        var config = ctx.RequestServices.GetRequiredService<RtfqConfig>();
+        var source = config.FindSource(sourceName);
+        if (source is null) return false;
+
+        var policy = ctx.RequestServices.GetRequiredService<Policy.PolicyEngine>();
+        if (!policy.Evaluate(caller, sourceName, AccessLevel.Write).Allowed) return false;
+
+        return Policy.TargetPolicy.EvaluateWrite(source, table) == Policy.TargetOutcome.Allowed;
     }
 
     static async Task Refresh(HttpContext ctx)

@@ -9,7 +9,8 @@ namespace Rtfq.Cli;
 
 internal static class Program
 {
-    static readonly string[] Flags = ["production", "insecure-skip-verify", "help", "version", "quiet"];
+    static readonly string[] Flags =
+        ["production", "insecure-skip-verify", "help", "version", "quiet", "write", "schema"];
 
     static async Task<int> Main(string[] argv)
     {
@@ -38,6 +39,9 @@ internal static class Program
                 "describe" => await DescribeAsync(args).ConfigureAwait(false),
                 "refresh" => await RefreshAsync(args).ConfigureAwait(false),
                 "explain" => await ExplainAsync(args).ConfigureAwait(false),
+                "approvals" => await ApprovalsAsync(args).ConfigureAwait(false),
+                "unlock" => await UnlockAsync(args).ConfigureAwait(false),
+                "lock" => await LockAsync(args).ConfigureAwait(false),
                 "mcp" => await McpAsync(args).ConfigureAwait(false),
                 _ => Fail($"unknown command '{args.Command}'"),
             };
@@ -248,6 +252,123 @@ internal static class Program
         return 0;
     }
 
+    // --- the human side of the write path -------------------------------------
+
+    /// <summary>
+    /// Shows what is waiting on a human, and records the answer.
+    ///
+    /// It prints the statement and the rows, and nothing else. There is no
+    /// summary of what the change is "for", because the case this gate exists for
+    /// is an agent persuaded by a poisoned row, and such an agent writes a very
+    /// convincing summary.
+    /// </summary>
+    static async Task<int> ApprovalsAsync(Args args)
+    {
+        using var client = BuildClient(args, out var error);
+        if (client is null) return Fail(error!);
+
+        var approve = args.Value("approve");
+        var deny = args.Value("deny");
+        var approver = args.Value("as") ?? Environment.UserName;
+        var reason = args.Value("reason");
+        if (Leftovers(args)) return 2;
+
+        if (approve is not null || deny is not null)
+        {
+            var id = approve ?? deny!;
+            var result = await client.DecideApprovalAsync(id, approve is not null, approver, reason)
+                .ConfigureAwait(false);
+            Console.WriteLine($"{result.Id}: {result.Outcome} by {approver}");
+            return 0;
+        }
+
+        var pending = await client.ListApprovalsAsync().ConfigureAwait(false);
+        if (pending.Pending.Count == 0)
+        {
+            Console.WriteLine("nothing is waiting for approval");
+            return 0;
+        }
+
+        foreach (var item in pending.Pending)
+        {
+            Console.WriteLine(new string('-', 72));
+            Console.WriteLine($"{item.Id}  {item.Kind} on {item.Source}/{item.Target}"
+                + (item.AffectedRows is { } n ? $"  ({n} row(s))" : ""));
+            Console.WriteLine($"requested by token '{item.TokenId}', expires {item.ExpiresAt}");
+            Console.WriteLine();
+            Console.WriteLine("  statement:");
+            var newline = (char)10;
+            foreach (var line in item.Statement.ReplaceLineEndings(newline.ToString()).Split(newline))
+                Console.WriteLine("    " + line);
+
+            if (item.DiffColumns.Count > 0)
+            {
+                Console.WriteLine();
+                Console.WriteLine("  rows as they are now:");
+                Console.WriteLine("    " + string.Join(" | ", item.DiffColumns));
+                foreach (var row in ParseRows(item.DiffRows))
+                    Console.WriteLine("    " + row);
+            }
+
+            Console.WriteLine();
+            Console.WriteLine($"  approve: rtfq approvals --approve {item.Id} --as YOU");
+            Console.WriteLine($"  deny:    rtfq approvals --deny {item.Id} --as YOU");
+        }
+
+        Console.WriteLine(new string('-', 72));
+        return 0;
+    }
+
+    static IEnumerable<string> ParseRows(string diffRows)
+    {
+        JsonNode? parsed;
+        try { parsed = JsonNode.Parse(diffRows); }
+        catch (System.Text.Json.JsonException) { yield break; }
+
+        if (parsed is not JsonArray rows) yield break;
+
+        foreach (var row in rows)
+        {
+            yield return row is JsonArray cells
+                ? string.Join(" | ", cells.Select(c => c?.ToString() ?? "NULL"))
+                : row?.ToString() ?? "";
+        }
+    }
+
+    static async Task<int> UnlockAsync(Args args)
+    {
+        using var client = BuildClient(args, out var error);
+        if (client is null) return Fail(error!);
+
+        var source = args.Value("source") ?? args.Positional.FirstOrDefault();
+        if (string.IsNullOrEmpty(source)) return Fail("a source is required: rtfq unlock SOURCE --write --ttl 15m");
+
+        var level = args.Has("schema") ? "schema" : "write";
+        if (args.Has("write")) { /* the default; accepted so the documented form works */ }
+        var ttl = args.Value("ttl") ?? "15m";
+        if (Leftovers(args)) return 2;
+
+        var result = await client.UnlockAsync(source, level, ttl).ConfigureAwait(false);
+        if (result.Hint is { } hint) Console.WriteLine(hint);
+        foreach (var u in result.Unlocked)
+            Console.WriteLine($"  {u.Source}  {u.Level}  until {u.ExpiresAt}  (opened by {u.Who})");
+        return 0;
+    }
+
+    static async Task<int> LockAsync(Args args)
+    {
+        using var client = BuildClient(args, out var error);
+        if (client is null) return Fail(error!);
+
+        var source = args.Value("source") ?? args.Positional.FirstOrDefault();
+        if (string.IsNullOrEmpty(source)) return Fail("a source is required: rtfq lock SOURCE");
+        if (Leftovers(args)) return 2;
+
+        var result = await client.LockAsync(source).ConfigureAwait(false);
+        Console.WriteLine(result.Hint ?? $"{source} is locked.");
+        return 0;
+    }
+
     static RtfqClient? BuildClient(Args args, out string? error)
     {
         error = null;
@@ -327,6 +448,9 @@ internal static class Program
               rtfq refresh   NAME
               rtfq query     --source NAME "SELECT ..." [--max-rows N]
               rtfq explain   --source NAME "SELECT ..."
+              rtfq approvals [--approve ID | --deny ID] [--as NAME] [--reason TEXT]
+              rtfq unlock    SOURCE [--write | --schema] [--ttl 15m]
+              rtfq lock      SOURCE
               rtfq mcp
 
             OPTIONS

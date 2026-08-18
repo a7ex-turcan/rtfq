@@ -1,7 +1,8 @@
-# All four source kinds in one config.
+# All four source kinds in one config, and the production shape of the write
+# path: an allow-list, a cap, a human gate, and a runtime lock.
 #
-# Read-only throughout: writes arrive in M3. Every secret is a reference, so this
-# one passes `rtfq validate --production` provided TLS is configured.
+# Every secret is a reference, so this one passes `rtfq validate --production`
+# provided TLS is configured.
 #
 #   rtfq validate --config examples/rtfq.multi.yaml
 
@@ -26,10 +27,34 @@ server:
           catalog: read
           billing-api: read
 
+      # A separate token for the agent allowed to change things. The effective
+      # level is the intersection of the grant and the source's own access:, so
+      # this token can write to orders and nowhere else, whatever it asks for.
+      - id: agent-writer
+        secret: ${env:RTFQ_TOKEN_WRITER}
+        grants:
+          orders: write
+          warehouse: read
+
 defaults:
   max_rows: 1000
   statement_timeout: 15s
   schema_cache_ttl: 15m
+  max_affected_rows: 50
+  approval_ttl: 10m
+
+# Where a human is asked. The default queues inside this process and is answered
+# with `rtfq approvals`; webhook hands the question to something else entirely,
+# which is how a Slack integration is built without Slack living in the binary.
+#
+# Failing closed is the contract: an endpoint that is down, slow, or answering
+# nonsense yields no approval, never a default one.
+approval:
+  mode: webhook
+  endpoint: https://approvals.internal/rtfq
+  timeout: 10s
+  headers:
+    Authorization: ${env:APPROVAL_TOKEN}
 
 sources:
   # --- PostgreSQL ----------------------------------------------------------
@@ -37,8 +62,23 @@ sources:
     kind: postgres
     dsn: ${env:ORDERS_DSN}
     description: Order lifecycle, fulfilment, returns
+    access: write
     schemas: [public, fulfilment]
     max_rows: 500
+
+    # With no writable_tables, access: write reaches nothing. An absent
+    # allow-list is absent, not permissive.
+    writable_tables:
+      - public.orders
+      - fulfilment.shipments
+
+    # Deny beats allow, always, and applies to reads as well as writes.
+    deny_tables:
+      - "*.payment_tokens"
+
+    max_affected_rows: 20
+    require_approval: true
+    require_unlock: true
 
   # --- SQL Server ------------------------------------------------------------
   # Statements are T-SQL. Note that a SQL Server source makes the Linux binary

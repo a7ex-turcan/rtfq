@@ -70,6 +70,7 @@ public static class ConfigLoader
         var server = ReadServer(cursor.Map("server"), diags);
         var defaults = ReadDefaults(cursor.Map("defaults"), diags);
         var sources = ReadSources(cursor.Seq("sources"), diags);
+        var approval = ReadApproval(cursor.Map("approval"), diags);
         cursor.ReportUnknownKeys();
 
         if (server is null)
@@ -78,7 +79,10 @@ public static class ConfigLoader
             return new(null, diags);
         }
 
-        var config = new RtfqConfig { Server = server, Defaults = defaults, Sources = sources };
+        var config = new RtfqConfig
+        {
+            Server = server, Defaults = defaults, Sources = sources, Approval = approval,
+        };
         return new(config, diags);
     }
 
@@ -175,9 +179,41 @@ public static class ConfigLoader
             LockTimeout = c.Duration("lock_timeout", d.LockTimeout, diags),
             WriteHandleTtl = c.Duration("write_handle_ttl", d.WriteHandleTtl, diags),
             SchemaCacheTtl = c.Duration("schema_cache_ttl", d.SchemaCacheTtl, diags),
+            ApprovalTtl = c.Duration("approval_ttl", d.ApprovalTtl, diags),
         };
         c.ReportUnknownKeys();
         return d;
+    }
+
+    static ApprovalSection ReadApproval(MapCursor? c, List<Diagnostic> diags)
+    {
+        var a = new ApprovalSection();
+        if (c is null) return a;
+
+        var headers = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
+        var inline = false;
+        if (c.Map("headers") is { } headerMap)
+        {
+            foreach (var (key, _) in headerMap.Entries())
+            {
+                var value = headerMap.Secret(key, out var wasReference);
+                if (value is null) continue;
+                headers[key] = value;
+                if (!wasReference) inline = true;
+            }
+            headerMap.MarkAllUsed();
+        }
+
+        a = a with
+        {
+            Mode = c.Secret("mode", out _) ?? a.Mode,
+            Endpoint = c.Secret("endpoint", out _) ?? a.Endpoint,
+            Timeout = c.Duration("timeout", a.Timeout, diags),
+            Headers = headers,
+            HeadersHadInlineSecret = inline,
+        };
+        c.ReportUnknownKeys();
+        return a;
     }
 
     static List<SourceSection> ReadSources(MapCursor? c, List<Diagnostic> diags)
@@ -234,6 +270,7 @@ public static class ConfigLoader
             var denyTables = s.StringList("deny_tables");
             var maxAffected = s.NullableInt("max_affected_rows", diags);
             var requireApproval = string.Equals(s.RawScalar("require_approval"), "true", StringComparison.OrdinalIgnoreCase);
+            var requireUnlock = string.Equals(s.RawScalar("require_unlock"), "true", StringComparison.OrdinalIgnoreCase);
 
             s.ReportUnknownKeys();
 
@@ -264,6 +301,7 @@ public static class ConfigLoader
                 DenyTables = denyTables,
                 MaxAffectedRows = maxAffected,
                 RequireApproval = requireApproval,
+                RequireUnlock = requireUnlock,
             });
         }
 

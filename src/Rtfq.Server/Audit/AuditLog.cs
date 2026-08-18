@@ -27,6 +27,12 @@ public sealed record AuditEntry
 
     /// <summary>What a schema change did, for changes that have no rows to journal.</summary>
     public string? SchemaSummary { get; init; }
+
+    /// <summary>
+    /// Who approved this, when a human did. The point of an approval that is not
+    /// recorded alongside the exact statement is hard to state.
+    /// </summary>
+    public string? Approver { get; init; }
 }
 
 /// <summary>
@@ -75,6 +81,7 @@ public sealed class AuditLog : IDisposable
             if (entry.RowCount is { } rows) w.WriteNumber("row_count", rows);
             if (entry.Truncated is { } truncated) w.WriteBoolean("truncated", truncated);
             WriteIfPresent(w, "schema_summary", entry.SchemaSummary);
+            WriteIfPresent(w, "approver", entry.Approver);
 
             // Written as raw JSON rather than an escaped string, so the journal
             // stays greppable and a recovery script can read it directly.

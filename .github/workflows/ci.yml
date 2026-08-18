@@ -131,6 +131,8 @@ jobs:
       - name: The multi-source example passes production validation
         env:
           RTFQ_TOKEN_AGENT: ci-token
+          RTFQ_TOKEN_WRITER: ci-writer-token
+          APPROVAL_TOKEN: ci-approval-token
           ORDERS_DSN: Host=localhost;Database=orders;Username=rtfq
           WAREHOUSE_DSN: Server=localhost;Database=wh;User Id=rtfq;Password=x
           CATALOG_URI: mongodb://localhost:27017
@@ -152,6 +154,49 @@ jobs:
             echo "::error::refused, but not by the unresolved-secret rule"
             exit 1
           }
+
+      # An approval provider that cannot be reached approves nothing, so a
+      # misconfigured one has to be caught at validate time rather than at the
+      # moment somebody is waiting on it. Each case asserts its own named check:
+      # exiting non-zero for some other reason would otherwise look like a pass.
+      - name: A misconfigured approval provider is refused before anyone waits on it
+        env:
+          RTFQ_TOKEN_AGENT: ci-token
+          ORDERS_DSN: Host=localhost;Database=orders;Username=rtfq
+        run: |
+          check() {
+            name=$1; want=$2
+            { cat examples/rtfq.dev.yaml; cat /tmp/fragment.yaml; } > /tmp/approval.yaml
+            if output=$(./out/rtfq validate --config /tmp/approval.yaml 2>&1); then
+              echo "::error::$name: validation accepted it"
+              exit 1
+            fi
+            echo "$output" | grep -q "$want" || {
+              echo "::error::$name: refused, but not by $want"
+              echo "$output"
+              exit 1
+            }
+            echo "ok: $name -> $want"
+          }
+
+          cat > /tmp/fragment.yaml <<YAML
+          approval:
+            mode: webhook
+          YAML
+          check "webhook with no endpoint" approval.endpoint_missing
+
+          cat > /tmp/fragment.yaml <<YAML
+          approval:
+            mode: slack
+          YAML
+          check "an unknown mode" approval.mode_unknown
+
+          cat > /tmp/fragment.yaml <<YAML
+          approval:
+            mode: webhook
+            endpoint: approvals.internal
+          YAML
+          check "an endpoint that is not a URL" approval.endpoint_malformed
 
       - uses: actions/upload-artifact@v7
         with:

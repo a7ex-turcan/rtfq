@@ -182,10 +182,21 @@ public static class Render
         return sb.ToString().TrimEnd();
     }
 
-    public static string Settlement(SettleWriteResponse response) =>
-        response.AffectedRows is { } rows
+    /// <summary>
+    /// Names the approver on the way back, so the agent's own transcript records
+    /// who let a change through rather than only the server's journal.
+    /// </summary>
+    public static string Settlement(SettleWriteResponse response)
+    {
+        var line = response.AffectedRows is { } rows
             ? $"{response.Outcome}: {rows} row(s)"
             : response.Outcome;
+
+        if (response.Approver is { } approver) line += $", approved by {approver}";
+        if (response.Hint is { } hint) line += $". {hint}";
+
+        return line;
+    }
 
     // --- helpers -----------------------------------------------------------
 

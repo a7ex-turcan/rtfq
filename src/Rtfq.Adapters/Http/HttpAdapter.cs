@@ -119,11 +119,15 @@ public sealed class HttpAdapter : ISourceAdapter
             throw new AdapterException(ErrorCodes.InsufficientAccess,
                 $"refused: '{path}' is not on the allow-list for '{Name}'");
 
-        // Reads only until M3, whatever the config permits: a method being
-        // configured does not make it a read.
+        // Reads only, whatever the config permits: a method being configured does
+        // not make it a read. This is not a milestone gap. The write path is built
+        // on a transaction that can capture before-images and roll back, and an
+        // HTTP endpoint offers neither - a POST that has been sent cannot be
+        // un-sent, so there is nothing here for propose/commit to hold.
         if (method != "GET" && method != "HEAD")
             throw new AdapterException(ErrorCodes.InsufficientAccess,
-                $"refused: {method} is a write; writes arrive in M3");
+                $"refused: {method} is a write, and HTTP sources are read-only - a request that has been sent " +
+                "cannot be rolled back, so it cannot be proposed and committed");
 
         try
         {

@@ -175,6 +175,42 @@ public sealed class WritePathTests(WritePathFixture fixture)
     static async Task<RtfqClientException> Refused(Func<Task> action) =>
         await Assert.ThrowsAsync<RtfqClientException>(action);
 
+    // --- what discovery says about writing ------------------------------------
+
+    [Fact]
+    public async Task Describe_table_reports_a_table_this_token_can_actually_write()
+    {
+        using var client = fixture.Client(WritePathFixture.WriterToken);
+
+        var result = await client.DescribeTableAsync("shop", "public.orders");
+
+        // Answered before the attempt, so an agent does not draft a statement it
+        // cannot run - and, just as importantly, does not decline to draft one it can.
+        Assert.True(result.Writable);
+    }
+
+    [Fact]
+    public async Task Describe_table_does_not_promise_a_write_the_allow_list_would_refuse()
+    {
+        using var client = fixture.Client(WritePathFixture.WriterToken);
+
+        var result = await client.DescribeTableAsync("shop", "public.audit_trail");
+
+        Assert.False(result.Writable);
+    }
+
+    [Fact]
+    public async Task Describe_table_does_not_promise_a_write_to_a_token_granted_only_read()
+    {
+        using var client = fixture.Client(WritePathFixture.ReaderToken);
+
+        var result = await client.DescribeTableAsync("shop", "public.orders");
+
+        // Same table, same allow-list; the grant is what differs. Writable is per
+        // caller, not per table.
+        Assert.False(result.Writable);
+    }
+
     // --- the propose/commit split ---------------------------------------------
 
     [Fact]

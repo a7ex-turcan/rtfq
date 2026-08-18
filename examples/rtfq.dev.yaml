@@ -6,6 +6,12 @@
 #   export RTFQ_TOKEN_AGENT=dev-token-please-change
 #   export ORDERS_DSN='Host=localhost;Port=5432;Database=orders;Username=rtfq'
 #   rtfq serve --config examples/rtfq.dev.yaml
+#
+# Writing is configured here but shut at runtime. To try the write path:
+#
+#   rtfq unlock orders --write --ttl 15m   # opens it, for fifteen minutes
+#   rtfq approvals                          # what is waiting, and how to answer
+#   rtfq lock orders                        # shut it again
 
 server:
   # Loopback only, so TLS is not required. The moment this becomes 0.0.0.0,
@@ -15,20 +21,53 @@ server:
   auth:
     mode: token
     tokens:
-      - id: agent-readonly
+      - id: agent
         secret: ${env:RTFQ_TOKEN_AGENT}
         grants:
-          orders: read
+          # The effective level is the intersection of this and the source's
+          # own access:, so enabling a write always takes edits in two places.
+          orders: write
 
 defaults:
   max_rows: 1000
   statement_timeout: 15s
+
+  # A person is slower than a machine. Affordable because a proposal awaiting
+  # approval holds no transaction open while it waits.
+  approval_ttl: 10m
 
 sources:
   - name: orders
     kind: postgres
     dsn: ${env:ORDERS_DSN}
     description: Order lifecycle, fulfilment, returns
-    # Absent access: means read. Writes arrive in M3.
+    # Absent access: means read.
+    access: write
     schemas: [public]
     max_rows: 500
+
+    # --- the write path ----------------------------------------------------
+    # An absent allow-list is absent, not permissive: with no writable_tables,
+    # access: write reaches nothing. Entries are schema-qualified and compared
+    # exactly.
+    writable_tables:
+      - public.orders
+      - public.order_lines
+
+    # Deny beats allow, always, and applies to reads as well.
+    deny_tables:
+      - "*.payment_tokens"
+
+    # Enforced against the driver's real count from the uncommitted execution,
+    # never an estimate. A statement over the cap is rolled back, not truncated.
+    max_affected_rows: 50
+
+    # A human sees the statement and the rows before anything is saved. They
+    # never see a summary the agent wrote.
+    require_approval: true
+
+    # Writing stays off at runtime until somebody runs `rtfq unlock`, even
+    # though the config above permits it. A restart re-locks; that is not
+    # configurable, because an unlock that outlives its incident is not
+    # time-boxed.
+    require_unlock: true

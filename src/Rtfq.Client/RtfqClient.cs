@@ -134,6 +134,49 @@ public sealed class RtfqClient : IDisposable
         return await ReadAsync(response, RtfqJson.Default.SettleWriteResponse, cancellationToken).ConfigureAwait(false);
     }
 
+    // --- the human side of the write path -------------------------------------
+
+    public async Task<PendingApprovalsResponse> ListApprovalsAsync(CancellationToken cancellationToken = default)
+    {
+        using var response = await _http.GetAsync("/v1/approvals", cancellationToken).ConfigureAwait(false);
+        return await ReadAsync(response, RtfqApprovalJson.Default.PendingApprovalsResponse, cancellationToken)
+            .ConfigureAwait(false);
+    }
+
+    public async Task<ApprovalDecisionResponse> DecideApprovalAsync(
+        string id, bool approved, string approver, string? reason = null, CancellationToken cancellationToken = default)
+    {
+        var request = new ApprovalDecisionRequest { Id = id, Approved = approved, Approver = approver, Reason = reason };
+        using var response = await _http.PostAsJsonAsync(
+            "/v1/approvals/decide", request, RtfqApprovalJson.Default.ApprovalDecisionRequest, cancellationToken)
+            .ConfigureAwait(false);
+        return await ReadAsync(response, RtfqApprovalJson.Default.ApprovalDecisionResponse, cancellationToken)
+            .ConfigureAwait(false);
+    }
+
+    public async Task<UnlockResponse> UnlockAsync(
+        string source, string level, string? ttl = null, CancellationToken cancellationToken = default)
+    {
+        var request = new UnlockRequest { Source = source, Level = level, Ttl = ttl };
+        using var response = await _http.PostAsJsonAsync(
+            "/v1/unlocks", request, RtfqApprovalJson.Default.UnlockRequest, cancellationToken).ConfigureAwait(false);
+        return await ReadAsync(response, RtfqApprovalJson.Default.UnlockResponse, cancellationToken).ConfigureAwait(false);
+    }
+
+    public async Task<UnlockResponse> LockAsync(string source, CancellationToken cancellationToken = default)
+    {
+        var request = new UnlockRequest { Source = source, Level = "write" };
+        using var response = await _http.PostAsJsonAsync(
+            "/v1/unlocks/lock", request, RtfqApprovalJson.Default.UnlockRequest, cancellationToken).ConfigureAwait(false);
+        return await ReadAsync(response, RtfqApprovalJson.Default.UnlockResponse, cancellationToken).ConfigureAwait(false);
+    }
+
+    public async Task<UnlockResponse> ListUnlocksAsync(CancellationToken cancellationToken = default)
+    {
+        using var response = await _http.GetAsync("/v1/unlocks", cancellationToken).ConfigureAwait(false);
+        return await ReadAsync(response, RtfqApprovalJson.Default.UnlockResponse, cancellationToken).ConfigureAwait(false);
+    }
+
     public async Task<HealthResponse> HealthAsync(CancellationToken cancellationToken = default)
     {
         using var response = await _http.GetAsync("/health", cancellationToken).ConfigureAwait(false);

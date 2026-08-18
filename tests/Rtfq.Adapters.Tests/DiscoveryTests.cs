@@ -75,7 +75,9 @@ public sealed class DiscoveryTests(RtfqFixture fixture)
 
         Assert.Equal("public.orders", result.Table);
         Assert.Equal("id", Assert.Single(result.PrimaryKey));
-        Assert.False(result.Writable);   // writes arrive in M3; claiming otherwise misleads an agent
+        // This source declares read and the token was granted read, so there is no
+        // write here to report. WritePathTests covers the case where there is.
+        Assert.False(result.Writable);
 
         var total = Assert.Single(result.Columns, c => c.Name == "total");
         Assert.Equal("numeric(10,2)", total.Type);

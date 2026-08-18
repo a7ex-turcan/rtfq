@@ -5,9 +5,10 @@ heterogeneous data sources** on a machine they cannot otherwise reach.
 
 One binary, one YAML file, five minutes to first query. **Read by default, write on a leash.**
 
-> **Status: M1 — MCP read surface.** PostgreSQL reads over an authenticated TLS port, capped and audited, plus
-> schema discovery that keeps working when the database does not. The write path lands in M3.
-> See [docs/PHASES.md](docs/PHASES.md).
+> **Status: M4 — approval and unlock.** PostgreSQL, SQL Server, MongoDB and allow-listed HTTP APIs over an
+> authenticated TLS port, capped and audited; schema discovery that keeps working when the database does not; and
+> a write path where a change is proposed, shown to a human as a statement and a diff, and saved only once
+> somebody says yes. What remains is M5: packaging and the quickstart. See [docs/PHASES.md](docs/PHASES.md).
 
 ---
 
@@ -78,16 +79,56 @@ id   customer      total
 2 rows, 4 ms
 ```
 
+## When the agent wants to change something
+
+The sample config has the orders source configured for writes, and shut. Writing is a three-step conversation, and
+you are in it:
+
+```bash
+rtfq unlock orders --write --ttl 15m   # opens it, for fifteen minutes; a restart re-locks
+```
+
+The agent proposes a change. It runs inside a transaction, reports the real number of rows it would touch, and is
+rolled back — nothing is saved. Because this source sets `require_approval`, it goes to you:
+
+```bash
+rtfq approvals
+```
+
+```
+------------------------------------------------------------------------
+91d09ef04b54  mutation on orders/public.orders  (1 row(s))
+requested by token 'agent', expires 2026-08-18T07:17:10Z
+
+  statement:
+    UPDATE orders SET status = 'paid' WHERE id = 1
+
+  rows as they are now:
+    id | status
+    1  | stuck
+
+  approve: rtfq approvals --approve 91d09ef04b54 --as YOU
+  deny:    rtfq approvals --deny 91d09ef04b54 --as YOU
+------------------------------------------------------------------------
+```
+
+You see the statement and the rows. You never see a summary the agent wrote, because the case this gate exists for
+is an agent that has been persuaded by something it read, and such an agent writes a very reassuring summary.
+
+Answering it lets the agent's next `commit_write` through — and if the rows moved while you were deciding, the
+commit is refused rather than applied to data you did not approve. `rtfq lock orders` shuts it again.
+
 ## Point an agent at it
 
 ```bash
 rtfq mcp    # speaks MCP on stdio; RTFQ_SERVER and RTFQ_TOKEN select the server
 ```
 
-Six tools: `list_sources`, `describe_source`, `describe_table`, `sample`, `query`, `explain`. Meeting an
-unfamiliar four-table database and answering a question that needs a join costs about **240 tokens end to end**;
-`describe_source` on a 202-table database costs about **379**. Those numbers are asserted in CI and printed on
-every run, because an agent pays them on every call — see [ADR 0004](docs/decisions/0004-m1-go-no-go.md).
+Nine tools: `list_sources`, `describe_source`, `describe_table`, `sample`, `query`, `explain`, `propose_write`,
+`commit_write`, `abort_write`. Meeting an unfamiliar four-table database and answering a question that needs a
+join costs about **240 tokens end to end**; `describe_source` on a 202-table database costs about **379**. Those
+numbers are asserted in CI and printed on every run, because an agent pays them on every call — see
+[ADR 0004](docs/decisions/0004-m1-go-no-go.md).
 
 ## What it enforces, today
 
@@ -101,8 +142,19 @@ every run, because an agent pays them on every call — see [ADR 0004](docs/deci
   That is a rule, not a config knob, and there is no `--insecure` escape hatch on the server.
 - **Secrets are referenced, never inlined.** `${env:...}` and `${file:...}`. A password written into the config
   is a warning in development and a hard failure under `--production`.
-- **Reads are reads.** Every statement is parsed before it runs and anything that is not a plain read is refused,
-  including a write hidden inside a CTE, `SELECT INTO`, `COPY ... FROM PROGRAM` and `EXPLAIN ANALYZE`.
+- **Reads are reads.** Every statement is parsed before it runs — a real parser, per dialect, never a regex — and
+  a read that is not a read is refused: a write hidden inside a CTE, `SELECT INTO`, `COPY ... FROM PROGRAM`,
+  `EXPLAIN ANALYZE`.
+- **Nothing is written by accident.** A mutation is proposed and committed as two steps. The proposal runs inside
+  a transaction, reports the driver's **real** affected-row count, captures the rows as they were, and saves
+  nothing. An unqualified `UPDATE` or `DELETE` is refused, and so is a trivially-true `WHERE`.
+- **Writable is an allow-list, per table.** An absent allow-list reaches nothing rather than everything, and a
+  deny rule beats it — including for what a statement merely reads through a subquery.
+- **A human can be required, and sees only facts.** `require_approval` puts the statement and the affected rows in
+  front of a person. The approval binds to that exact change: if the data moves while they decide, the commit is
+  refused and rolled back.
+- **Writing can be shut even where it is configured.** `require_unlock` keeps a source closed until somebody runs
+  `rtfq unlock`. The window is capped at an hour and **a restart re-locks** — not a setting.
 - **Discovery survives the database being down.** Schema is cached and served with its age attached, so an agent
   can learn a table's shape and draft a statement offline. Staleness is always stated, never inferred.
 - **Everything is audited, locally.** Append-only JSONL covering every request *including refusals*, with the

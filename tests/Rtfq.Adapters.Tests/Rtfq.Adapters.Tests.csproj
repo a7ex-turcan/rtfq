@@ -22,6 +22,17 @@
   </ItemGroup>
 
   <ItemGroup>
+    <!--
+      Every collection in here stands up its own container. Left uncapped, a full
+      run has ten of them competing, and Testcontainers' reaper starts killing
+      containers out from under running tests - which surfaces as an unrelated
+      test failing for no reason anyone can reproduce. Three at a time keeps the
+      suite parallel without starving Docker.
+    -->
+    <None Update="xunit.runner.json" CopyToOutputDirectory="PreserveNewest" />
+  </ItemGroup>
+
+  <ItemGroup>
     <ProjectReference Include="..\..\src\Rtfq.Server\Rtfq.Server.csproj" />
     <ProjectReference Include="..\..\src\Rtfq.Client\Rtfq.Client.csproj" />
     <ProjectReference Include="..\..\src\Rtfq.Adapters\Rtfq.Adapters.csproj" />

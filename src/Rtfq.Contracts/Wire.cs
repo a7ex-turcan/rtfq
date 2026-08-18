@@ -115,7 +115,11 @@ public sealed record DescribeTableResponse
     public required string Kind { get; init; }
     public long? EstimatedRows { get; init; }
 
-    /// <summary>Whether this caller could write here. Always false until M3.</summary>
+    /// <summary>
+    /// Whether this caller could write here: the source declares it, the token
+    /// was granted it, and the table is on the write allow-list. Says nothing
+    /// about a time-boxed unlock, which is a fact about right now.
+    /// </summary>
     public required bool Writable { get; init; }
 
     public required SchemaFreshness Schema { get; init; }
@@ -192,8 +196,16 @@ public sealed record SettleWriteRequest
 public sealed record SettleWriteResponse
 {
     public required string Handle { get; init; }
+
+    /// <summary>committed, aborted, or pending while a human has not yet decided.</summary>
     public required string Outcome { get; init; }
+
     public int? AffectedRows { get; init; }
+
+    /// <summary>Who approved it, when a human did.</summary>
+    public string? Approver { get; init; }
+
+    public string? Hint { get; init; }
 }
 
 public sealed record SourceInfo
