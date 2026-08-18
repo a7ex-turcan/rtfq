@@ -55,6 +55,12 @@ jobs:
       # self-hosted tool. Jammy's 2.35 brings the floor down to 2.34.
       - name: Publish NativeAOT on an old-glibc base
         run: |
+          # pipefail, because the tee below otherwise reports ITS exit code and a
+          # failed publish passes the step. That is not hypothetical: an AOT trim
+          # error shipped green here once, and the two checks after it passed on a
+          # binary that had never been produced.
+          set -o pipefail
+
           docker run --rm -v "$PWD:/src" -w /src ubuntu:22.04 bash -c '
             set -e
             export DEBIAN_FRONTEND=noninteractive
@@ -72,7 +78,15 @@ jobs:
       - name: The glibc floor stays low enough for Debian 12 and RHEL 9
         run: |
           ceiling=2.34
+
+          # Assert the subject exists before measuring it. Without this, objdump
+          # on a missing file yields an empty string, the comparison below finds
+          # nothing above the ceiling, and the step passes having checked nothing.
+          [ -x out/rtfq ] || { echo "::error::out/rtfq was not produced"; exit 1; }
+
           highest=$(objdump -T out/rtfq | grep -oE 'GLIBC_2\.[0-9]+' | sed 's/GLIBC_//' | sort -V | tail -1)
+          [ -n "$highest" ] || { echo "::error::no GLIBC symbols found; objdump read nothing"; exit 1; }
+
           echo "highest glibc symbol required: $highest (ceiling $ceiling)"
           if [ "$(printf '%s\n%s\n' "$highest" "$ceiling" | sort -V | tail -1)" != "$ceiling" ]; then
             echo "::error::binary requires glibc $highest, above the $ceiling ceiling"
@@ -87,6 +101,18 @@ jobs:
       # code nobody has verified against the published binary.
       - name: Only the known assemblies may produce trim warnings
         run: |
+          # Same trap: an empty publish.log has no unexpected assemblies in it.
+          [ -s publish.log ] || { echo "::error::publish.log is empty"; exit 1; }
+
+          # An IL2026/IL3050 in OUR code is an error, not a warning, and it kills
+          # the publish. Caught here too, named, because the message that matters
+          # is "this line is AOT-hostile" rather than a linker exit code.
+          if grep -qE "^/src/src/.*(Trim analysis error|AOT analysis error)" publish.log; then
+            echo "::error::our own code produced a trim or AOT analysis error:"
+            grep -E "^/src/src/.*(Trim analysis error|AOT analysis error)" publish.log
+            exit 1
+          fi
+
           allowed="Microsoft.Data.SqlClient|Microsoft.Data.SqlClient.Internal.Logging|Microsoft.SqlServer.TransactSql.ScriptDom|MongoDB.Bson|MongoDB.Driver|System.Configuration.ConfigurationManager"
           found=$(grep -oE "Assembly '[A-Za-z0-9._]+'" publish.log | sed -E "s/Assembly '(.*)'/\1/" | sort -u || true)
           echo "assemblies producing trim warnings:"; echo "$found" | sed 's/^/  /'

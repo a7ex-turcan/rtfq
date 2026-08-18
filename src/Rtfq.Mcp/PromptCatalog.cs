@@ -23,18 +23,43 @@ namespace Rtfq.Mcp;
 /// </summary>
 internal static class PromptCatalog
 {
-    public static JsonArray Describe() =>
-        [.. Prompts.Select(p => new JsonObject
+    /// <summary>
+    /// Built by explicit <see cref="Append"/> rather than a collection
+    /// expression, for the same reason ToolCatalog is: spreading into a
+    /// JsonArray lowers to <c>JsonArray.Add&lt;T&gt;</c>, which carries
+    /// RequiresDynamicCode and fails the AOT publish. It compiles and runs
+    /// perfectly well under the JIT, which is exactly what makes it worth a
+    /// comment.
+    /// </summary>
+    public static JsonArray Describe()
+    {
+        var prompts = new JsonArray();
+
+        foreach (var prompt in Prompts)
         {
-            ["name"] = p.Name,
-            ["description"] = p.Description,
-            ["arguments"] = new JsonArray([.. p.Arguments.Select(a => (JsonNode)new JsonObject
+            var arguments = new JsonArray();
+            foreach (var a in prompt.Arguments)
             {
-                ["name"] = a.Name,
-                ["description"] = a.Description,
-                ["required"] = a.IsRequired,
-            })]),
-        })];
+                Append(arguments, new JsonObject
+                {
+                    ["name"] = a.Name,
+                    ["description"] = a.Description,
+                    ["required"] = a.IsRequired,
+                });
+            }
+
+            Append(prompts, new JsonObject
+            {
+                ["name"] = prompt.Name,
+                ["description"] = prompt.Description,
+                ["arguments"] = arguments,
+            });
+        }
+
+        return prompts;
+    }
+
+    static void Append(JsonArray array, JsonNode? node) => ((IList<JsonNode?>)array).Add(node);
 
     public static bool TryGet(string name, JsonObject arguments, out string description, out string text)
     {

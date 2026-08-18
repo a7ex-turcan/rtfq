@@ -31,6 +31,15 @@ are called out under *Changed* rather than buried in *Fixed*.
 - A truncated `query` response now also names `explain`, alongside what it already said about narrowing.
   Nothing is added to responses that went fine.
 
+### Fixed
+
+- **CI reported success on a publish that failed.** `docker run ... | tee publish.log` returned `tee`'s exit
+  code, so an AOT trim error passed the publish step; the two steps after it then ran against a binary that had
+  never been produced and passed as well, one of them printing `highest glibc symbol required:` with nothing
+  after it. The pipeline now sets `pipefail`, the glibc check asserts the binary exists and that objdump found
+  symbols, and a trim or AOT analysis error in RTFQ's own code is caught and named rather than surfacing as a
+  linker exit code.
+
 ## [0.6.0] - 2026-08-18
 
 ### Added
