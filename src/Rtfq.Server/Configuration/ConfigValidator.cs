@@ -54,10 +54,8 @@ public static class ConfigValidator
 
         if (config.Server.Tls is { } tls)
         {
-            if (!File.Exists(tls.CertPath))
-                d.Add(new("server.tls.files_exist", Severity.Error, $"TLS certificate '{tls.CertPath}' does not exist", "server.tls.cert"));
-            if (!File.Exists(tls.KeyPath))
-                d.Add(new("server.tls.files_exist", Severity.Error, $"TLS key '{tls.KeyPath}' does not exist", "server.tls.key"));
+            CheckTlsFile(tls.CertPath, "certificate", "server.tls.cert", d);
+            CheckTlsFile(tls.KeyPath, "key", "server.tls.key", d);
         }
         else if (production)
         {
@@ -65,6 +63,31 @@ public static class ConfigValidator
                 "production mode requires TLS even on loopback", "server.tls"));
         }
     }
+
+    /// <summary>
+    /// These two take a <b>path</b>, unlike every other secret in the file, which
+    /// takes a reference. That is an easy thing to get wrong, and getting it wrong
+    /// with <c>${file:...}</c> substitutes the PEM itself - so this names the
+    /// mistake rather than echoing a private key into the terminal, CI log or
+    /// screenshot that the error lands in.
+    /// </summary>
+    static void CheckTlsFile(string value, string what, string path, List<Diagnostic> d)
+    {
+        if (File.Exists(value)) return;
+
+        if (value.Contains("-----BEGIN", StringComparison.Ordinal) || value.Contains((char)10))
+        {
+            d.Add(new("server.tls.path_not_contents", Severity.Error,
+                $"'{path}' takes a path to the {what} file, not its contents - "
+                + "write 'cert: /etc/rtfq/tls.crt' rather than 'cert: ${file:/etc/rtfq/tls.crt}'", path));
+            return;
+        }
+
+        d.Add(new("server.tls.files_exist", Severity.Error,
+            $"TLS {what} '{Truncate(value)}' does not exist", path));
+    }
+
+    static string Truncate(string value) => value.Length <= 120 ? value : value[..117] + "...";
 
     static void ValidateAuth(RtfqConfig config, bool production, List<Diagnostic> d)
     {

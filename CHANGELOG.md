@@ -55,6 +55,16 @@ well-formed malicious write. See [ADR 0007](docs/decisions/0007-m4-approval-and-
 - Seeing or answering the approval queue requires a token with write access to some source. A read-only agent has
   no business in the queue that exists to police it.
 - Opening a source requires the access being opened, and an unlock for `write` does not open `schema`.
+- `server.tls.cert` and `server.tls.key` take a **path**, unlike every other secret in the file. Writing
+  `${file:...}` there substituted the PEM and then reported it as a missing filename — printing a private key
+  into the terminal, and into whatever CI log or screenshot the error landed in. That case is now named rather
+  than echoed, and any over-long value in the diagnostic is truncated.
+
+### Documentation
+
+- The README covers **putting `rtfq` on your PATH** on each platform, and **reaching the server from another
+  machine**: certificate, config, firewall, and the reasons not to point the port at the public internet. Every
+  command in both sections was run before it was written down.
 
 ## [0.4.0] - 2026-08-17
 

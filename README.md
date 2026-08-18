@@ -37,7 +37,49 @@ tar -xzf rtfq-0.1.0-linux-x64.tar.gz && cd rtfq-0.1.0-linux-x64
 ./rtfq --version
 ```
 
-Verify against `SHA256SUMS`, published with each release. Intel Macs and Windows on ARM are not built — see
+Verify against `SHA256SUMS`, published with each release.
+
+### Putting `rtfq` on your PATH
+
+The binary depends on nothing but its own directory, so "installing" it is copying one file somewhere already on
+your PATH.
+
+**Linux** — `/usr/local/bin` is on every distribution's default PATH:
+
+```bash
+sudo install -m 0755 rtfq /usr/local/bin/rtfq
+rtfq --version
+```
+
+**macOS** — the same, plus one step, because a binary downloaded with a browser is quarantined and Gatekeeper
+will refuse to run it:
+
+```bash
+xattr -d com.apple.quarantine rtfq 2>/dev/null || true
+sudo install -m 0755 rtfq /usr/local/bin/rtfq
+rtfq --version
+```
+
+**Windows** — put it somewhere durable and append that directory to your user PATH. This needs no administrator
+rights, and it survives reboots because it writes the environment variable rather than setting it for the session:
+
+```powershell
+$dir = "$env:LOCALAPPDATA\Programs\rtfq"
+New-Item -ItemType Directory -Force $dir | Out-Null
+Copy-Item .\rtfq.exe $dir -Force
+
+$path = [Environment]::GetEnvironmentVariable('Path', 'User')
+if ($path -notlike "*$dir*") {
+    [Environment]::SetEnvironmentVariable('Path', "$path;$dir", 'User')
+}
+$env:Path += ";$dir"    # this session, without reopening the terminal
+
+rtfq --version
+```
+
+If you would rather not install anything, every example below works with `./rtfq` in place of `rtfq`.
+
+Intel Macs and Windows on ARM are not built — see
 [CHANGELOG.md](CHANGELOG.md) for why that is a decision rather than an oversight.
 
 **Linux prerequisites.** The bundle needs `libicu` on the host — `apt install libicu72` or
@@ -78,6 +120,118 @@ id   customer      total
 
 2 rows, 4 ms
 ```
+
+## Reaching it from another machine
+
+The sample listens on `127.0.0.1`, which is the right default and useless for the actual job: RTFQ is meant to
+run on the box that can see the databases, with agents and people talking to it from elsewhere.
+
+Moving the listener off loopback requires TLS. That is a rule rather than a config knob — `rtfq validate` refuses
+`0.0.0.0` without a certificate, and there is no `--insecure` escape hatch on the server. So exposing the port is
+three things: a certificate, a config change, and a hole in the firewall.
+
+### 1. A certificate
+
+A self-signed one is fine for a team on a private network. The **subject alternative name matters** — clients
+validate against it, so it must list the name or address callers will actually use:
+
+```bash
+sudo mkdir -p /etc/rtfq
+sudo openssl req -x509 -newkey rsa:2048 -nodes -days 365 \
+  -keyout /etc/rtfq/tls.key -out /etc/rtfq/tls.crt \
+  -subj "/CN=rtfq.internal" \
+  -addext "subjectAltName=DNS:rtfq.internal,IP:10.0.0.5"
+sudo chmod 600 /etc/rtfq/tls.key
+```
+
+<details>
+<summary>PowerShell equivalent</summary>
+
+```powershell
+$dir = "$env:ProgramData\rtfq"
+New-Item -ItemType Directory -Force $dir | Out-Null
+
+$cert = New-SelfSignedCertificate -Subject "CN=rtfq.internal" `
+    -DnsName "rtfq.internal", "10.0.0.5" `
+    -CertStoreLocation Cert:\CurrentUser\My -NotAfter (Get-Date).AddYears(1)
+
+# RTFQ reads PEM, so export rather than leaving it in the store.
+$pem = [Convert]::ToBase64String($cert.RawData, 'InsertLineBreaks')
+"-----BEGIN CERTIFICATE-----`n$pem`n-----END CERTIFICATE-----" |
+    Set-Content "$dir\tls.crt" -Encoding ascii
+
+$key = [Convert]::ToBase64String(
+    $cert.PrivateKey.ExportPkcs8PrivateKey(), 'InsertLineBreaks')
+"-----BEGIN PRIVATE KEY-----`n$key`n-----END PRIVATE KEY-----" |
+    Set-Content "$dir\tls.key" -Encoding ascii
+```
+</details>
+
+If you have a real certificate — an internal CA, or Let's Encrypt via DNS-01 for a private name — use that
+instead and skip the `--insecure-skip-verify` caveat below.
+
+### 2. Point the config at it
+
+`cert` and `key` take **paths**, not `${file:...}` references. They are the one exception to *secrets are
+referenced, never inlined*: RTFQ hands the paths to the TLS stack rather than reading them itself.
+
+```yaml
+server:
+  listen: 0.0.0.0:7420
+  tls:
+    cert: /etc/rtfq/tls.crt
+    key: /etc/rtfq/tls.key
+```
+
+Then check it before you open anything:
+
+```bash
+rtfq validate --config /etc/rtfq/rtfq.yaml --production
+```
+
+`--production` is worth using here even if this is not production. It turns the inline-secret warnings into
+errors, which is exactly the review you want at the moment a port stops being private.
+
+### 3. Open the port
+
+```bash
+# Debian / Ubuntu
+sudo ufw allow 7420/tcp
+
+# RHEL / Fedora
+sudo firewall-cmd --permanent --add-port=7420/tcp && sudo firewall-cmd --reload
+```
+
+```powershell
+# Windows, elevated
+New-NetFirewallRule -DisplayName "RTFQ" -Direction Inbound `
+    -Protocol TCP -LocalPort 7420 -Action Allow
+```
+
+Prefer scoping the rule to the callers you expect — `sudo ufw allow from 10.0.0.0/24 to any port 7420 proto tcp`,
+or `-RemoteAddress 10.0.0.0/24` on Windows. A token is the only thing standing between the open port and your
+databases, and a token is one leaked environment variable away from being public.
+
+### Then, from a client machine
+
+```bash
+export RTFQ_SERVER='https://rtfq.internal:7420'
+export RTFQ_TOKEN='the-secret-from-the-tokens-block'
+
+rtfq sources
+```
+
+With a self-signed certificate the client will refuse it until the CA is trusted. `--insecure-skip-verify` gets
+you moving, and it is a **client-side** flag: it cannot weaken anything the server enforces, but it does mean the
+client stops checking who it is talking to. Fine while you are wiring things up; not something to leave in a
+script that runs unattended.
+
+### Do not put this on the public internet
+
+The threat model is a private network with an authenticated port on it. There is no rate limiting, no lockout
+after failed tokens, and static bearer tokens do not rotate. If callers are outside your network, put RTFQ behind
+a VPN or an SSH tunnel — `ssh -L 7420:127.0.0.1:7420 user@host` needs no certificate, no firewall change, and no
+`0.0.0.0`, and for one person on a laptop it is the better answer than everything above.
 
 ## When the agent wants to change something
 
