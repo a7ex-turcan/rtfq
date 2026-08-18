@@ -158,20 +158,22 @@ Illustrative, not final:
 server:
   listen: 0.0.0.0:7420
   tls:
-    cert: ${file:/etc/rtfq/tls.crt}
-    key: ${file:/etc/rtfq/tls.key}
+    # Paths, not ${file:...} references - these two are the one exception to
+    # "secrets are referenced": RTFQ hands the paths to the TLS stack.
+    cert: /etc/rtfq/tls.crt
+    key: /etc/rtfq/tls.key
   auth:
     mode: token
     tokens:
       - id: agent-readonly
-        secret: ${env:RTFQ_TOKEN_AGENT}
+        secret: ${env:RTFQ_READONLY_SECRET}
         grants:
           orders-db: read
           catalog: read
           billing-api: read
 
       - id: agent-fixer
-        secret: ${env:RTFQ_TOKEN_FIXER}
+        secret: ${env:RTFQ_FIXER_SECRET}
         grants:
           orders-db: schema       # still bounded by the source block below
           catalog: read

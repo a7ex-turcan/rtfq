@@ -3,7 +3,7 @@
 # This config is deliberately NOT production-safe, and `rtfq validate --production`
 # refuses it. CI asserts that refusal, so the rule cannot rot.
 #
-#   export RTFQ_TOKEN_AGENT=dev-token-please-change
+#   export RTFQ_AGENT_SECRET=dev-token-please-change   # invent this; clients present it back
 #   export ORDERS_DSN='Host=localhost;Port=5432;Database=orders;Username=rtfq'
 #   rtfq serve --config examples/rtfq.dev.yaml
 #
@@ -22,7 +22,7 @@ server:
     mode: token
     tokens:
       - id: agent
-        secret: ${env:RTFQ_TOKEN_AGENT}
+        secret: ${env:RTFQ_AGENT_SECRET}
         grants:
           # The effective level is the intersection of this and the source's
           # own access:, so enabling a write always takes edits in two places.

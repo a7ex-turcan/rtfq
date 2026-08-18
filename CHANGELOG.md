@@ -60,8 +60,19 @@ well-formed malicious write. See [ADR 0007](docs/decisions/0007-m4-approval-and-
   into the terminal, and into whatever CI log or screenshot the error landed in. That case is now named rather
   than echoed, and any over-long value in the diagnostic is truncated.
 
+### Changed — configuration
+
+- The sample configs renamed their token secrets: `RTFQ_TOKEN_AGENT` is now **`RTFQ_AGENT_SECRET`** in
+  `rtfq.dev.yaml`, and `RTFQ_READONLY_SECRET` / `RTFQ_WRITER_SECRET` in `rtfq.multi.yaml`. The old names sat one
+  character away from `RTFQ_TOKEN`, the client's own variable, while meaning something entirely different — one
+  is a secret the server's config resolves, the other is the bearer token a client presents. **These are names
+  the sample chooses, not names RTFQ knows**, so this affects nobody's deployment: if your config says
+  `${env:RTFQ_TOKEN_AGENT}`, it still works.
+
 ### Documentation
 
+- `CLAUDE.md`'s illustrative config wrote TLS as `cert: ${file:/etc/rtfq/tls.crt}`, which is exactly the form
+  that does not work. Corrected to paths, and the snippet now passes `rtfq validate --production` as written.
 - The README covers **putting `rtfq` on your PATH** on each platform, and **reaching the server from another
   machine**: certificate, config, firewall, and the reasons not to point the port at the public internet. Every
   command in both sections was run before it was written down.

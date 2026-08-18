@@ -92,19 +92,27 @@ asserted in CI, because it is set by whichever host compiles the binary and drif
 
 ## Try it
 
+The sample config references its secrets rather than containing them, so the **server** needs both in its
+environment. Neither name is special to RTFQ — `examples/rtfq.dev.yaml` picks them, and you can too:
+
 ```bash
-export RTFQ_TOKEN_AGENT='dev-token-please-change'
-export ORDERS_DSN='Host=localhost;Port=5432;Database=orders;Username=rtfq'
+export RTFQ_AGENT_SECRET='dev-token-please-change'                                # you invent this
+export ORDERS_DSN='Host=localhost;Port=5432;Database=orders;Username=rtfq'        # your database
 
 rtfq validate --config examples/rtfq.dev.yaml
 rtfq serve    --config examples/rtfq.dev.yaml
 ```
 
-Then, from anywhere that can reach it:
+`RTFQ_AGENT_SECRET` is the bearer token for the identity the config calls `agent`; whoever presents it gets that
+token's grants and nothing else. `ORDERS_DSN` is how RTFQ itself reaches Postgres. **The agent never sees the
+second one** — that separation is the whole point.
+
+Then, from anywhere that can reach it. These two names *are* known to the CLI, and just save you passing
+`--server` and `--token` on every command:
 
 ```bash
 export RTFQ_SERVER='http://127.0.0.1:7420'
-export RTFQ_TOKEN='dev-token-please-change'
+export RTFQ_TOKEN='dev-token-please-change'   # the same value as RTFQ_AGENT_SECRET above
 
 rtfq sources
 rtfq describe --source orders                        # what tables exist

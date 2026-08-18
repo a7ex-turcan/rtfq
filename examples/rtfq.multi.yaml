@@ -20,7 +20,7 @@ server:
     mode: token
     tokens:
       - id: agent-readonly
-        secret: ${env:RTFQ_TOKEN_AGENT}
+        secret: ${env:RTFQ_READONLY_SECRET}
         grants:
           orders: read
           warehouse: read
@@ -31,7 +31,7 @@ server:
       # level is the intersection of the grant and the source's own access:, so
       # this token can write to orders and nowhere else, whatever it asks for.
       - id: agent-writer
-        secret: ${env:RTFQ_TOKEN_WRITER}
+        secret: ${env:RTFQ_WRITER_SECRET}
         grants:
           orders: write
           warehouse: read

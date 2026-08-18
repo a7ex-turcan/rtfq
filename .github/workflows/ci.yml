@@ -101,7 +101,7 @@ jobs:
       # it requires the same variables an operator would export.
       - name: Smoke-test the published binary
         env:
-          RTFQ_TOKEN_AGENT: ci-smoke-token
+          RTFQ_AGENT_SECRET: ci-smoke-token
           ORDERS_DSN: Host=localhost;Port=5432;Database=orders;Username=rtfq
         run: |
           ./out/rtfq --version
@@ -112,7 +112,7 @@ jobs:
       # non-zero for some other reason would otherwise look like a pass.
       - name: Production mode refuses the development sample
         env:
-          RTFQ_TOKEN_AGENT: ci-smoke-token
+          RTFQ_AGENT_SECRET: ci-smoke-token
           ORDERS_DSN: Host=localhost;Port=5432;Database=orders;Username=rtfq
         run: |
           if output=$(./out/rtfq validate --config examples/rtfq.dev.yaml --production 2>&1); then
@@ -130,8 +130,8 @@ jobs:
       # documentation is showing people a config that would be refused.
       - name: The multi-source example passes production validation
         env:
-          RTFQ_TOKEN_AGENT: ci-token
-          RTFQ_TOKEN_WRITER: ci-writer-token
+          RTFQ_READONLY_SECRET: ci-token
+          RTFQ_WRITER_SECRET: ci-writer-token
           APPROVAL_TOKEN: ci-approval-token
           ORDERS_DSN: Host=localhost;Database=orders;Username=rtfq
           WAREHOUSE_DSN: Server=localhost;Database=wh;User Id=rtfq;Password=x
@@ -147,7 +147,7 @@ jobs:
       - name: Unresolvable secret references are refused
         run: |
           if output=$(./out/rtfq validate --config examples/rtfq.dev.yaml 2>&1); then
-            echo "::error::validation passed with RTFQ_TOKEN_AGENT and ORDERS_DSN unset"
+            echo "::error::validation passed with RTFQ_AGENT_SECRET and ORDERS_DSN unset"
             exit 1
           fi
           echo "$output" | grep -q 'config.secret_unresolved' || {
@@ -161,7 +161,7 @@ jobs:
       # exiting non-zero for some other reason would otherwise look like a pass.
       - name: A misconfigured approval provider is refused before anyone waits on it
         env:
-          RTFQ_TOKEN_AGENT: ci-token
+          RTFQ_AGENT_SECRET: ci-token
           ORDERS_DSN: Host=localhost;Database=orders;Username=rtfq
         run: |
           check() {
