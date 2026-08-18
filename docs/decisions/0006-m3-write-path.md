@@ -80,6 +80,11 @@ worse. Four concurrent proposals means something upstream is wrong.
 There is no approver until M4. A source marked `require_approval` rolls the
 proposal back and says so, rather than parking it somewhere nobody will look.
 
+> **Superseded by [ADR 0007](0007-m4-approval-and-unlock.md).** M4 queues it for a
+> human instead. What survives from this decision is the shape of the refusal: an
+> approval-required proposal still rolls back at propose time and holds nothing,
+> for the locking reasons set out above.
+
 ## What the suite found
 
 Four real defects, none of which would have survived to production but all of

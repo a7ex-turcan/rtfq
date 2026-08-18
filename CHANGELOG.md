@@ -11,6 +11,11 @@ are called out under *Changed* rather than buried in *Fixed*.
 
 ## [Unreleased]
 
+Nothing yet. Next up is M5: the Docker image, a quickstart timed on a clean machine, and the security posture
+document written for whoever has to approve pointing this at production.
+
+## [0.5.0] - 2026-08-18
+
 **M4 — approval and the time-boxed unlock**, the control `CLAUDE.md` calls the central defence against a
 well-formed malicious write. See [ADR 0007](docs/decisions/0007-m4-approval-and-unlock.md).
 
@@ -256,7 +261,8 @@ wire protocol, capped and audited. Thin, but nothing in it is a placeholder.
   osx-x64 native payload, so shipping the artifact now would mean withdrawing it later. See
   [ADR 0001](docs/decisions/0001-sql-parser-selection.md). No win-arm64 build either.
 
-[Unreleased]: https://github.com/a7ex-turcan/rtfq/compare/v0.4.0...HEAD
+[Unreleased]: https://github.com/a7ex-turcan/rtfq/compare/v0.5.0...HEAD
+[0.5.0]: https://github.com/a7ex-turcan/rtfq/releases/tag/v0.5.0
 [0.4.0]: https://github.com/a7ex-turcan/rtfq/releases/tag/v0.4.0
 [0.3.0]: https://github.com/a7ex-turcan/rtfq/releases/tag/v0.3.0
 [0.2.0]: https://github.com/a7ex-turcan/rtfq/releases/tag/v0.2.0
