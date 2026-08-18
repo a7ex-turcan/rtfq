@@ -3,4 +3,12 @@
     <ProjectReference Include="..\Rtfq.Contracts\Rtfq.Contracts.csproj" />
     <ProjectReference Include="..\Rtfq.Client\Rtfq.Client.csproj" />
   </ItemGroup>
+
+  <ItemGroup>
+    <!-- The catalogs stay internal: they are this assembly's business, not API.
+         The tests still need at them, because a malformed prompt is invisible in
+         a client rather than loud. -->
+    <InternalsVisibleTo Include="Rtfq.Server.Tests" />
+  </ItemGroup>
+
 </Project>

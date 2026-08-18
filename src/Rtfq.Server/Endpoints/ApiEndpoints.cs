@@ -436,18 +436,51 @@ internal static class ApiEndpoints
                 NextCursor = null,
                 // ADR 0003: truncation is terminal, so the response has to say what
                 // to do instead. "Ask again" is not available and never will be.
+                //
+                // The pointer to explain is here because this is the moment it is
+                // worth calling and the moment nobody does: an agent that hits a
+                // cap reaches for a variant of the same query, not for the plan
+                // that would tell it why. Naming the tool costs a handful of
+                // tokens on the responses that went wrong, and nothing on the
+                // ones that did not.
                 Hint = result.Truncated
                     ? $"stopped at the {maxRows}-row cap; narrow the WHERE clause, aggregate, " +
-                      "or ask for fewer columns - there is no pagination"
+                      "or ask for fewer columns - there is no pagination. " +
+                      "If you do not know why it matched so much, call explain on the same statement."
                     : null,
             }, RtfqJson.Default.QueryResponse, body.Source, body.Statement,
                rowCount: result.RowCount, truncated: result.Truncated).ConfigureAwait(false);
         }
         catch (AdapterException ex)
         {
-            await scope.RefuseAdapter(ex, body.Source, body.Statement).ConfigureAwait(false);
+            await scope.RefuseAdapter(ex, body.Source, body.Statement, Diagnosis(ex, body.Source))
+                .ConfigureAwait(false);
         }
     }
+
+    /// <summary>
+    /// What to do about a failed read, when there is something to do.
+    ///
+    /// A timeout is the case that matters. Today it tells an agent only that the
+    /// statement was too slow, so the agent retries a variant of it and is slow
+    /// again; the plan is what distinguishes a missing index from a query that
+    /// was always going to read the table. Deliberately a pointer rather than the
+    /// plan itself — fetching one here means a second round trip to a source that
+    /// has just demonstrated it is struggling.
+    /// </summary>
+    static string? Diagnosis(AdapterException ex, string source) => ex.ErrorCode switch
+    {
+        ErrorCodes.SourceTimeout =>
+            $"call explain on the same statement against '{source}' before retrying: the plan says whether this "
+            + "needs an index, a narrower WHERE clause, or is simply reading more than it can in the time allowed",
+
+        // A dialect error is the agent's to fix from the message, and the schema
+        // cache answers "what is this column called" without touching the source.
+        ErrorCodes.SourceRejected =>
+            $"if this is about a column or table name, describe_table on '{source}' answers it from cache",
+
+        _ => null,
+    };
 
     static async Task Sample(HttpContext ctx)
     {

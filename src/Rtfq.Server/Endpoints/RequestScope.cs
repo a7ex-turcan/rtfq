@@ -91,15 +91,24 @@ internal sealed class RequestScope
         await WriteAsync(StatusCodes.Status200OK, value, typeInfo).ConfigureAwait(false);
     }
 
-    public async Task Refuse(int status, string code, string message, string? source = null, string? statement = null)
+    /// <param name="detail">What to do next, when there is something useful to say. Never a restatement of the message.</param>
+    public async Task Refuse(
+        int status, string code, string message,
+        string? source = null, string? statement = null, string? detail = null)
     {
         Audit(source, statement, "refused", "error", code, null, null);
-        await WriteAsync(status, new ErrorResponse(new ErrorBody(code, message)), RtfqJson.Default.ErrorResponse)
+        await WriteAsync(status, new ErrorResponse(new ErrorBody(code, message, detail)), RtfqJson.Default.ErrorResponse)
             .ConfigureAwait(false);
     }
 
     /// <summary>Maps an adapter failure onto a status code without the handler knowing any driver specifics.</summary>
-    public Task RefuseAdapter(Rtfq.Adapters.AdapterException ex, string? source = null, string? statement = null)
+    /// <param name="diagnosis">
+    /// What the caller should do next, when there is something useful to say.
+    /// Carried in the error's detail rather than folded into the message, so a
+    /// client can show or suppress it without parsing prose.
+    /// </param>
+    public Task RefuseAdapter(
+        Rtfq.Adapters.AdapterException ex, string? source = null, string? statement = null, string? diagnosis = null)
     {
         var status = ex.ErrorCode switch
         {
@@ -111,7 +120,7 @@ internal sealed class RequestScope
             ErrorCodes.SourceUnreachable => StatusCodes.Status502BadGateway,
             _ => StatusCodes.Status500InternalServerError,
         };
-        return Refuse(status, ex.ErrorCode, ex.Message, source, statement);
+        return Refuse(status, ex.ErrorCode, ex.Message, source, statement, diagnosis);
     }
 
     bool _audited;

@@ -11,7 +11,25 @@ are called out under *Changed* rather than buried in *Fixed*.
 
 ## [Unreleased]
 
-Nothing yet.
+### Added
+
+- **Four MCP prompts** - `diagnose_slow_query`, `explore_source`, `investigate_record` and `propose_fix`. These
+  are procedures, not capabilities: each is carried out through the existing tools, so everything they lead to
+  passes the same gates, and none asserts anything about your data.
+
+  Prompts rather than a tenth tool, deliberately. A tool's description sits in the model's context all session -
+  which is why CLAUDE.md says adding one needs an argument - while a prompt is listed by name and its body only
+  fetched when it is run. The server now declares the `prompts` capability and answers `prompts/list` and
+  `prompts/get`.
+
+- **A failed read now says what to do about it.** A timeout points at `explain` on the same statement, because
+  the plan is what distinguishes a missing index from a query that was always going to read the table, and an
+  agent that only learns "too slow" retries a variant and is slow again. A dialect error points at
+  `describe_table`, which answers a column-name question from cache. Carried in the error's `detail` rather than
+  folded into the message, so a client can show or suppress it without parsing prose.
+
+- A truncated `query` response now also names `explain`, alongside what it already said about narrowing.
+  Nothing is added to responses that went fine.
 
 ## [0.6.0] - 2026-08-18
 

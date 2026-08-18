@@ -6,11 +6,14 @@ using Rtfq.Contracts;
 namespace Rtfq.Client;
 
 /// <summary>A refusal the server described in the stable error taxonomy.</summary>
-public sealed class RtfqClientException(string code, string message, int statusCode)
+public sealed class RtfqClientException(string code, string message, int statusCode, string? detail = null)
     : Exception(message)
 {
     public string Code { get; } = code;
     public int StatusCode { get; } = statusCode;
+
+    /// <summary>What to do next, when the server had something useful to say. Never a restatement of the message.</summary>
+    public string? Detail { get; } = detail;
 }
 
 /// <summary>
@@ -197,7 +200,7 @@ public sealed class RtfqClient : IDisposable
                     .ReadFromJsonAsync(RtfqJson.Default.ErrorResponse, cancellationToken).ConfigureAwait(false);
 
                 if (error?.Error is { } body)
-                    throw new RtfqClientException(body.Code, body.Message, status);
+                    throw new RtfqClientException(body.Code, body.Message, status, body.Detail);
             }
             catch (JsonException)
             {

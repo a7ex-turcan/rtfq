@@ -360,6 +360,26 @@ Check it took with `/mcp` inside Claude Code, or from a shell:
 rtfq sources          # same credentials, same server, no MCP in the way
 ```
 
+### Workflows, as MCP prompts
+
+Alongside the tools, RTFQ exposes four **prompts** - procedures rather than capabilities. In Claude Code they
+appear as slash commands:
+
+| Prompt | For |
+|---|---|
+| `diagnose_slow_query` | A query timed out or read far more than expected. |
+| `explore_source` | Getting oriented in an unfamiliar database without reading the whole schema. |
+| `investigate_record` | Following one record across the tables that reference it. |
+| `propose_fix` | Preparing a data change so a human can approve exactly what will happen. |
+
+They live here rather than as a tenth tool for a reason worth knowing: a tool's description sits in the model's
+context for the whole session, while a prompt is listed by name and its body only fetched when somebody runs it.
+A long procedure costs nothing until it is wanted.
+
+Each one carries out its work through the tools above, so everything a prompt leads to passes the same gates.
+None asserts anything about your data - they say which tool to reach for and in what order, and a prompt is
+fixed at build time while a schema is not.
+
 Other clients take the same three pieces — command `rtfq`, args `["mcp"]`, and the two environment variables.
 It speaks JSON-RPC 2.0 over stdio and writes its startup banner to stderr, so nothing pollutes the protocol.
 

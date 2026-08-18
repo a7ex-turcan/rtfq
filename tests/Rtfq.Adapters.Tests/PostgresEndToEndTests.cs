@@ -408,3 +408,58 @@ public sealed class PostgresEndToEndTests(RtfqFixture fixture)
         await Assert.ThrowsAnyAsync<HttpRequestException>(() => http.GetAsync("/health"));
     }
 }
+
+/// <summary>
+/// What a read tells an agent when it goes wrong. The plan is the thing that
+/// distinguishes a missing index from a query that was always going to read the
+/// table, and the moment it is worth calling is the moment an agent does not
+/// think to.
+/// </summary>
+[Collection(nameof(RtfqCollection))]
+public sealed class ReadDiagnosticsTests(RtfqFixture fixture)
+{
+    [Fact]
+    public async Task A_timeout_says_to_explain_the_statement_rather_than_only_that_it_was_slow()
+    {
+        using var client = fixture.Client(RtfqFixture.GrantedToken);
+
+        // pg_sleep outlasts the source's statement_timeout without needing a
+        // large table to be slow against.
+        var error = await Assert.ThrowsAsync<RtfqClientException>(() =>
+            client.QueryAsync("orders", "SELECT pg_sleep(30)"));
+
+        Assert.Equal(ErrorCodes.SourceTimeout, error.Code);
+        Assert.NotNull(error.Detail);
+        Assert.Contains("explain", error.Detail!, StringComparison.OrdinalIgnoreCase);
+
+        // The pointer is separate from the message, so a client can suppress it
+        // without parsing prose.
+        Assert.DoesNotContain("explain", error.Message, StringComparison.OrdinalIgnoreCase);
+    }
+
+    [Fact]
+    public async Task A_successful_read_carries_no_diagnosis_at_all()
+    {
+        using var client = fixture.Client(RtfqFixture.GrantedToken);
+
+        var result = await client.QueryAsync("orders", "SELECT id FROM orders LIMIT 3");
+
+        // Advice on a response that went fine is tokens an agent pays for
+        // nothing. The hint field exists for truncation, and this is not that.
+        Assert.False(result.Truncated);
+        Assert.Null(result.Hint);
+    }
+
+    [Fact]
+    public async Task A_truncated_read_points_at_explain_alongside_what_to_do_instead()
+    {
+        using var client = fixture.Client(RtfqFixture.GrantedToken);
+
+        var result = await client.QueryAsync("orders", "SELECT id FROM orders", maxRows: 2);
+
+        Assert.True(result.Truncated);
+        Assert.NotNull(result.Hint);
+        Assert.Contains("no pagination", result.Hint!);
+        Assert.Contains("explain", result.Hint!, StringComparison.OrdinalIgnoreCase);
+    }
+}

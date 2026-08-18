@@ -59,14 +59,18 @@ public sealed class McpServer(RtfqClient client, TextReader input, TextWriter ou
         {
             case "initialize":
                 // Echo the client's protocol version when it names one: this server
-                // exposes tools only, and that surface has been stable across
-                // revisions, so refusing on a version mismatch would fail for no
-                // reason a user could act on.
+                // exposes tools and prompts, and both surfaces have been stable
+                // across revisions, so refusing on a version mismatch would fail
+                // for no reason a user could act on.
                 var requested = request["params"]?["protocolVersion"]?.GetValue<string>() ?? DefaultProtocolVersion;
                 return Result(id, new JsonObject
                 {
                     ["protocolVersion"] = requested,
-                    ["capabilities"] = new JsonObject { ["tools"] = new JsonObject() },
+                    ["capabilities"] = new JsonObject
+                    {
+                        ["tools"] = new JsonObject(),
+                        ["prompts"] = new JsonObject(),
+                    },
                     ["serverInfo"] = new JsonObject
                     {
                         ["name"] = ServerName,
@@ -86,6 +90,12 @@ public sealed class McpServer(RtfqClient client, TextReader input, TextWriter ou
             case "tools/call":
                 return await CallToolAsync(id, request["params"]?.AsObject(), cancellationToken).ConfigureAwait(false);
 
+            case "prompts/list":
+                return Result(id, new JsonObject { ["prompts"] = PromptCatalog.Describe() });
+
+            case "prompts/get":
+                return GetPrompt(id, request["params"]?.AsObject());
+
             case null:
                 return Error(id, -32600, "Invalid request: no method");
 
@@ -93,6 +103,33 @@ public sealed class McpServer(RtfqClient client, TextReader input, TextWriter ou
                 // Notifications are fire-and-forget; unknown requests are an error.
                 return id is null ? null : Error(id, -32601, $"Method not found: {method}");
         }
+    }
+
+    /// <summary>
+    /// Returns a prompt's text. Nothing is executed here and no source is
+    /// touched: a prompt tells the agent which tools to use and in what order,
+    /// and every one of those calls goes back through the server's gates like
+    /// any other. A prompt cannot become a second place where policy lives.
+    /// </summary>
+    static JsonObject GetPrompt(JsonNode? id, JsonObject? parameters)
+    {
+        var name = parameters?["name"]?.GetValue<string>();
+        if (string.IsNullOrEmpty(name)) return Error(id, -32602, "prompts/get requires a name");
+
+        var arguments = parameters?["arguments"]?.AsObject() ?? [];
+
+        if (!PromptCatalog.TryGet(name, arguments, out var description, out var text))
+            return Error(id, -32602, $"unknown prompt '{name}'");
+
+        return Result(id, new JsonObject
+        {
+            ["description"] = description,
+            ["messages"] = new JsonArray(new JsonObject
+            {
+                ["role"] = "user",
+                ["content"] = new JsonObject { ["type"] = "text", ["text"] = text },
+            }),
+        });
     }
 
     async Task<JsonObject> CallToolAsync(JsonNode? id, JsonObject? parameters, CancellationToken cancellationToken)
@@ -111,7 +148,10 @@ public sealed class McpServer(RtfqClient client, TextReader input, TextWriter ou
         {
             // A refusal is a tool result, not a protocol error: the agent needs to
             // read the code and adapt, and a JSON-RPC error would deny it that.
-            return Result(id, Content($"[{ex.Code}] {ex.Message}", isError: true));
+            // The detail, where there is one, says what to do about it.
+            var text = $"[{ex.Code}] {ex.Message}";
+            if (ex.Detail is { } detail) text += $"{Environment.NewLine}{detail}";
+            return Result(id, Content(text, isError: true));
         }
         catch (ArgumentException ex)
         {

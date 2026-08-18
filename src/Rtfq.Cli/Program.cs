@@ -51,6 +51,7 @@ internal static class Program
             // The server already said why in the stable taxonomy; print its code
             // rather than reinterpreting it.
             Console.Error.WriteLine($"error [{ex.Code}]: {ex.Message}");
+            if (ex.Detail is { } detail) Console.Error.WriteLine($"  {detail}");
             return 1;
         }
         catch (HttpRequestException ex)
