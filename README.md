@@ -300,6 +300,69 @@ join costs about **240 tokens end to end**; `describe_source` on a 202-table dat
 numbers are asserted in CI and printed on every run, because an agent pays them on every call — see
 [ADR 0004](docs/decisions/0004-m1-go-no-go.md).
 
+### Claude Code
+
+Drop a `.mcp.json` in the project root:
+
+```json
+{
+  "mcpServers": {
+    "rtfq": {
+      "command": "rtfq",
+      "args": ["mcp"]
+    }
+  }
+}
+```
+
+No credentials in the file. `rtfq mcp` reads `RTFQ_SERVER` and `RTFQ_TOKEN` from the environment it inherits,
+which is what you want: `.mcp.json` is project-scoped and usually committed, and a bearer token pasted into it is
+a bearer token in your git history.
+
+If the server uses a self-signed certificate, the client has to be told to skip verification — there is no
+environment variable for it, because it is a decision worth making per invocation rather than once and forgetting:
+
+```json
+{
+  "mcpServers": {
+    "rtfq": {
+      "command": "rtfq",
+      "args": ["mcp", "--insecure-skip-verify"]
+    }
+  }
+}
+```
+
+Better, once you are past wiring things up: import the server's `tls.crt` into the client machine's trust store
+and drop the flag.
+
+For a machine where the environment is awkward to set, Claude Code expands `${VAR}` in this file, so you can
+point at variables by name rather than inlining values:
+
+```json
+{
+  "mcpServers": {
+    "rtfq": {
+      "command": "rtfq",
+      "args": ["mcp"],
+      "env": {
+        "RTFQ_SERVER": "${RTFQ_SERVER:-https://127.0.0.1:7420}",
+        "RTFQ_TOKEN": "${RTFQ_TOKEN}"
+      }
+    }
+  }
+}
+```
+
+Check it took with `/mcp` inside Claude Code, or from a shell:
+
+```bash
+rtfq sources          # same credentials, same server, no MCP in the way
+```
+
+Other clients take the same three pieces — command `rtfq`, args `["mcp"]`, and the two environment variables.
+It speaks JSON-RPC 2.0 over stdio and writes its startup banner to stderr, so nothing pollutes the protocol.
+
 ## What it enforces, today
 
 - **Default deny.** A caller sees only sources it was granted, and a source it cannot reach is reported exactly
