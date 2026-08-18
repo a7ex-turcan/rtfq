@@ -79,6 +79,9 @@ rtfq --version
 
 If you would rather not install anything, every example below works with `./rtfq` in place of `rtfq`.
 
+On Windows, [`scripts/windows/`](scripts/windows) does this and the rest of the setup — PATH, the environment
+your config references, a certificate, and the firewall rule — with the traps written down.
+
 Intel Macs and Windows on ARM are not built — see
 [CHANGELOG.md](CHANGELOG.md) for why that is a decision rather than an oversight.
 
@@ -138,6 +141,8 @@ Moving the listener off loopback requires TLS. That is a rule rather than a conf
 `0.0.0.0` without a certificate, and there is no `--insecure` escape hatch on the server. So exposing the port is
 three things: a certificate, a config change, and a hole in the firewall.
 
+On Windows, [`scripts/windows/rtfq-cert.ps1`](scripts/windows/rtfq-cert.ps1) does steps 1 and 3 for you.
+
 ### 1. A certificate
 
 A self-signed one is fine for a team on a private network. The **subject alternative name matters** — clients
@@ -181,7 +186,10 @@ instead and skip the `--insecure-skip-verify` caveat below.
 ### 2. Point the config at it
 
 `cert` and `key` take **paths**, not `${file:...}` references. They are the one exception to *secrets are
-referenced, never inlined*: RTFQ hands the paths to the TLS stack rather than reading them itself.
+referenced, never inlined*: RTFQ hands the paths to the TLS stack rather than reading them itself. Any location
+works — there is no folder RTFQ looks in — but prefer absolute, since a relative path resolves against whatever
+directory the server was launched from. Check too that the account running RTFQ can read the key file; a
+permission problem there surfaces as a startup failure that reads like a bad certificate.
 
 ```yaml
 server:

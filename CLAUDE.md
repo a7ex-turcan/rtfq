@@ -136,6 +136,12 @@ The agent is structurally forced to look before it leaps, and the human gets an 
 
 Config accepts `${env:PGPASSWORD}`, `${file:/run/secrets/pg}`, `${vault:...}`. A plaintext password in config is a startup **warning** in dev and a **hard fail** in production mode.
 
+**One exception, and it needs saying because it is the natural thing to get wrong:** `server.tls.cert` and
+`server.tls.key` take *paths*, not references. RTFQ hands them to the TLS stack rather than reading them, so
+`${file:...}` substitutes the PEM itself and then fails looking for a file by that name. Diagnostics must never
+echo the value back in that case — it is a private key, and the error lands in a terminal, a CI log, or a
+screenshot.
+
 Corollary — and this is **load-bearing, not advice**: the credential a writable source connects with must be scoped by the DBA to exactly the tables it may touch. Our guards are defence in depth, not a substitute for a correct `GRANT`. [ADR 0001](docs/decisions/0001-sql-parser-selection.md) is why this got promoted: a statement can pass every gate we have and still write, exfiltrate, or read the filesystem through a function call — `SELECT dblink_exec('host=evil', 'DELETE FROM orders')` is a plain read to any statement classifier. We can deny-list the functions we know about; we cannot enumerate the ones we do not. **The scoped grant is the real boundary. The security posture document must say so plainly, and never imply our guards make an over-privileged credential safe.** PII protection is delegated here too (see Non-goals #4 and Open questions): the primary answer is a scoped grant, not column masking in policy.
 
 ### 6. Audit everything, locally
@@ -278,6 +284,7 @@ Everything above the adapter layer is source-agnostic. If the core needs to chan
 
 - **Question additions to the tool surface.** Every new MCP tool costs the consuming agent context on every call. Adding one needs an argument, not just a use case.
 - **Never weaken a gate.** If a task seems to require bypassing policy, the statement guard, the row cap, or the propose/commit split — stop and flag it. Do not add an override flag.
+- **The API must never lie to an agent about what it can do.** A hint that says a feature is not ready when it shipped, or a `writable` flag hard-coded to false, is a defect of the same order as a broken gate — an agent plans from what discovery tells it, so a stale answer changes behaviour rather than merely reading badly. M4 shipped three of these and every one passed the test suite, because they were about *what we said*, not what we did. When a milestone lands, grep the hints and the capability flags, not just the code.
 - **Approval is the intent gate; never sell auto-commit as safe against malice.** The four structural gates stop blast radius, not a well-formed poisoned write. If a change would let a writable source commit without a human where a small malicious write matters, stop and flag it.
 - **The statement guard is an allow-list. Never turn it into a deny-list.** Adding a statement type is a deliberate act with an argument behind it; the default answer for anything not on the list is no. If you catch yourself writing "reject X" where X is a newly-discovered dangerous construct, stop — that is the deny-list creeping back, and the next construct will not be on your list.
 - **For DDL the allow-list has two levels, and the second one is where the danger is.** `ADD COLUMN` and `DROP COLUMN` are the *same* PostgreSQL node type, separated only by a subcommand; `DROP COLUMN` and `DROP CONSTRAINT` share one T-SQL statement type, separated only by the element kind. A guard that stops at the statement type allows data destruction. See [ADR 0002](docs/decisions/0002-ddl-additive-and-corrective.md).

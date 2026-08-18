@@ -1,0 +1,81 @@
+# Several SQL Server databases plus a PostgreSQL — the shape of a typical
+# internal estate, read-only.
+#
+# Read-only is not a setting you turn off later in one place. Writing needs
+# three edits: `access: write` on the source, a `writable_tables` allow-list,
+# and a write grant on a token. See examples/rtfq.dev.yaml for what that looks
+# like, and expect to add `require_approval` with it.
+#
+# On Windows, scripts/windows/ has a runnable path to all of this: PATH, the
+# environment, a certificate, and the firewall.
+#
+#   rtfq validate --config rtfq.yaml
+#   rtfq serve    --config rtfq.yaml
+
+server:
+  # Loopback. Moving off it requires TLS — a rule, not a knob, and validation
+  # refuses the config without a certificate. See "Reaching it from another
+  # machine" in the README, or scripts/windows/rtfq-cert.ps1.
+  listen: 127.0.0.1:7420
+
+  # tls:
+  #   # Paths, not ${file:...} references. These two are the one exception to
+  #   # "secrets are referenced": RTFQ hands the paths to the TLS stack rather
+  #   # than reading the files itself.
+  #   cert: C:\ProgramData\rtfq\tls.crt
+  #   key: C:\ProgramData\rtfq\tls.key
+
+  auth:
+    mode: token
+    tokens:
+      # One token per consumer, not one for everything. Revoking a leaked token
+      # should not mean re-issuing to everybody.
+      - id: agent
+        secret: ${env:RTFQ_AGENT_SECRET}
+        grants:
+          crm: read
+          orgchart: read
+          ops: read
+          reference: read
+
+defaults:
+  max_rows: 1000
+  statement_timeout: 15s
+  schema_cache_ttl: 15m
+
+sources:
+  # --- SQL Server -----------------------------------------------------------
+  # Statements are T-SQL. A SQL Server source makes the Linux binary require
+  # libicu on the host: the driver refuses to run in invariant globalization
+  # mode. Windows and macOS need nothing extra.
+  - name: crm
+    kind: mssql
+    dsn: ${env:CRM_DSN}
+    description: Customer records, contacts, account history
+    access: read
+    schemas: [dbo]
+
+  # orgchart and ops below share a host and a login, differing only by
+  # database. They are still two sources: RTFQ does not join across sources,
+  # and each is queried on its own connection in its own dialect.
+  - name: orgchart
+    kind: mssql
+    dsn: ${env:ORGCHART_DSN}
+    description: Organisational hierarchy and reporting lines
+    access: read
+    schemas: [dbo]
+
+  - name: ops
+    kind: mssql
+    dsn: ${env:OPS_DSN}
+    description: Operational scheduling and workload
+    access: read
+    schemas: [dbo]
+
+  # --- PostgreSQL -----------------------------------------------------------
+  - name: reference
+    kind: postgres
+    dsn: ${env:REFERENCE_DSN}
+    description: Shared reference and lookup data
+    access: read
+    schemas: [public]

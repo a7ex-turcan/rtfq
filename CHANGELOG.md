@@ -11,8 +11,26 @@ are called out under *Changed* rather than buried in *Fixed*.
 
 ## [Unreleased]
 
-Nothing yet. Next up is M5: the Docker image, a quickstart timed on a clean machine, and the security posture
-document written for whoever has to approve pointing this at production.
+### Added
+
+- **`scripts/windows/`** — PATH, environment, self-signed certificate and firewall rule, one script each. They
+  came out of a real deployment rather than being written to look tidy, so the comments carry the traps: the
+  certificate script needs PowerShell 7 because `ExportPkcs8PrivateKey` does not exist in 5.1, a Windows service
+  cannot see your user environment, and a SAN must name what callers actually dial. `scripts/README.md` collects
+  those in one place.
+- **`examples/rtfq.mssql.yaml`** — several SQL Server databases plus a PostgreSQL, the shape of a typical
+  internal estate, including two databases that share a host and are still two sources.
+
+### Documentation
+
+- `CLAUDE.md` gains a working agreement: **the API must never lie to an agent about what it can do.** A stale
+  hint or a hard-coded capability flag is a defect of the same order as a broken gate, because an agent plans
+  from what discovery tells it. M4 shipped three, and all three passed the suite.
+- `CLAUDE.md` states the one exception to *secrets are referenced*: `server.tls.cert` and `server.tls.key` take
+  paths, and a diagnostic must never echo the value when they do not.
+
+Next up is M5: the Docker image, a quickstart timed on a clean machine, and the security posture document
+written for whoever has to approve pointing this at production.
 
 ## [0.5.0] - 2026-08-18
 
