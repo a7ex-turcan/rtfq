@@ -17,10 +17,17 @@ public enum TargetOutcome
 /// Gate three of four: is this specific table one this source will accept a
 /// mutation against?
 ///
-/// Two rules, and their asymmetry is the point. **Deny is a glob** so a single
-/// entry can cover a family (<c>*.pii_*</c>), because the cost of a deny rule
-/// matching too much is an inconvenience. **Allow is exact**, because the cost of
-/// an allow rule matching too much is a table nobody meant to expose.
+/// Both lists are globs, and <b>deny is evaluated first and wins</b>. A deny rule
+/// matching too much is an inconvenience; an allow rule matching too much is a
+/// table nobody meant to expose — so the asymmetry that remains is which of the
+/// two gets the benefit of the doubt, not which supports a wildcard.
+///
+/// Allow accepted only exact names until 0.6.0. It takes patterns now because
+/// enumerating a hundred-table schema by hand is the kind of friction that ends
+/// with somebody turning the gate off entirely. The cost is real and stated in
+/// <see href="../../../docs/decisions/0008-wildcards-in-the-write-allow-list.md">ADR 0008</see>:
+/// a pattern covers tables that do not exist yet, so <c>dbo.*</c> silently
+/// includes whatever is created next month. The validator says so out loud.
 ///
 /// Comparison is ordinal and case-sensitive throughout: <c>"Orders"</c> and
 /// <c>orders</c> are genuinely different tables in PostgreSQL, and folding them
@@ -36,7 +43,9 @@ public static class TargetPolicy
         // An absent allow-list is absent, not permissive.
         if (source.WritableTables.Count == 0) return TargetOutcome.NotWritable;
 
-        return source.WritableTables.Contains(target, StringComparer.Ordinal)
+        // A pattern with no '*' behaves exactly as the old ordinal comparison did,
+        // so every allow-list written before 0.6.0 means what it always meant.
+        return source.WritableTables.Any(pattern => GlobMatches(pattern, target))
             ? TargetOutcome.Allowed
             : TargetOutcome.NotWritable;
     }
@@ -54,7 +63,10 @@ public static class TargetPolicy
 
     /// <summary>
     /// Glob match supporting <c>*</c> anywhere, so <c>*.pii_*</c> works as
-    /// CLAUDE.md's example config uses it. Implemented directly rather than by
+    /// CLAUDE.md's example config uses it, and <c>dbo.*</c> covers a schema.
+    /// <c>*</c> spans dots, so <c>dbo.*</c> also matches a three-part name -
+    /// irrelevant for the <c>schema.table</c> targets the guards produce, and
+    /// asserted in the tests so it stays a known property rather than a surprise. Implemented directly rather than by
     /// translating to a regular expression, because a config value turning into a
     /// pattern language is how a denial rule ends up meaning something other than
     /// it reads.

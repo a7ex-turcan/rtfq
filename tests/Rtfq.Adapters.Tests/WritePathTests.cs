@@ -98,6 +98,21 @@ public sealed class WritePathFixture : IAsyncLifetime
                     WritableTables = ["public.orders"],
                     DenyTables = ["*.payment_tokens"],
                 },
+
+                // Same database, allow-listed by pattern instead of by name
+                // (ADR 0008). Separate source so the exact-match tests above
+                // keep testing exact matching.
+                new SourceSection
+                {
+                    Name = "shop-wild",
+                    Kind = "postgres",
+                    Dsn = _postgres.GetConnectionString(),
+                    DsnWasReference = true,
+                    Access = AccessLevel.Write,
+                    Schemas = ["public"],
+                    WritableTables = ["public.*"],
+                    DenyTables = ["*.payment_tokens"],
+                },
             ],
         };
 
@@ -110,7 +125,7 @@ public sealed class WritePathFixture : IAsyncLifetime
         Id = id,
         Secret = secret,
         SecretWasReference = true,
-        Grants = new Dictionary<string, AccessLevel> { ["shop"] = grant },
+        Grants = new Dictionary<string, AccessLevel> { ["shop"] = grant, ["shop-wild"] = grant },
     };
 
     static (string Cert, string Key) Certificate(string directory)
@@ -209,6 +224,53 @@ public sealed class WritePathTests(WritePathFixture fixture)
         // Same table, same allow-list; the grant is what differs. Writable is per
         // caller, not per table.
         Assert.False(result.Writable);
+    }
+
+    // --- the allow-list as a pattern (ADR 0008) --------------------------------
+
+    [Fact]
+    public async Task A_pattern_allow_list_reaches_a_table_nobody_named()
+    {
+        using var client = fixture.Client(WritePathFixture.WriterToken);
+
+        // public.audit_trail is not on shop's allow-list and is not written down
+        // anywhere on shop-wild's either. The pattern is what permits it.
+        var proposal = await client.ProposeWriteAsync("shop-wild",
+            "INSERT INTO audit_trail (what) VALUES ('via pattern')");
+
+        await client.CommitWriteAsync(proposal.Handle);
+
+        Assert.Equal(1, await fixture.ScalarAsync<int>(
+            "SELECT count(*) FROM audit_trail WHERE what = 'via pattern'"));
+    }
+
+    [Fact]
+    public async Task A_deny_rule_still_beats_the_pattern()
+    {
+        using var client = fixture.Client(WritePathFixture.WriterToken);
+
+        // This is the property that makes a wildcard defensible at all: there is
+        // still a way to carve something out, and it is evaluated first.
+        var error = await Refused(() => client.ProposeWriteAsync("shop-wild",
+            "UPDATE payment_tokens SET token = 'stolen' WHERE id = 1"));
+
+        Assert.Equal(ErrorCodes.InsufficientAccess, error.Code);
+        Assert.Equal("super-secret", await fixture.ScalarAsync<string>(
+            "SELECT token FROM payment_tokens WHERE id = 1"));
+    }
+
+    [Fact]
+    public async Task The_pattern_does_not_leak_into_the_source_next_to_it()
+    {
+        using var client = fixture.Client(WritePathFixture.WriterToken);
+
+        // shop lists public.orders exactly. Sharing a database with a
+        // pattern-allowed source must not widen it.
+        var error = await Refused(() => client.ProposeWriteAsync("shop",
+            "INSERT INTO audit_trail (what) VALUES ('should not reach')"));
+
+        Assert.Equal(ErrorCodes.InsufficientAccess, error.Code);
+        Assert.Contains("not on the write allow-list", error.Message);
     }
 
     // --- the propose/commit split ---------------------------------------------

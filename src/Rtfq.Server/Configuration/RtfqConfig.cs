@@ -109,8 +109,12 @@ public sealed record SourceSection
     /// <summary>
     /// Targets this source will accept mutations against. **Empty means nothing
     /// is writable**, whatever <see cref="Access"/> says — an absent allow-list is
-    /// absent, not permissive. Entries are schema-qualified and compared exactly:
+    /// absent, not permissive.
+    ///
+    /// Entries are schema-qualified and may use <c>*</c>, so <c>dbo.*</c> covers a
+    /// whole schema (ADR 0008). Matching is ordinal and case-sensitive:
     /// <c>"Orders"</c> and <c>orders</c> are different tables.
+    /// <see cref="DenyTables"/> still wins.
     /// </summary>
     public IReadOnlyList<string> WritableTables { get; init; } = [];
 

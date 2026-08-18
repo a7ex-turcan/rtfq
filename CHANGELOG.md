@@ -11,7 +11,24 @@ are called out under *Changed* rather than buried in *Fixed*.
 
 ## [Unreleased]
 
+Nothing yet.
+
+## [0.6.0] - 2026-08-18
+
 ### Added
+
+- **`writable_tables` accepts patterns.** `dbo.*` covers a schema; `*` covers everything. Previously the
+  allow-list was exact-match only, and the answer to "make this dev schema writable" was a hundred lines of
+  YAML — which is the kind of friction that ends with somebody removing the gate entirely. See
+  [ADR 0008](docs/decisions/0008-wildcards-in-the-write-allow-list.md).
+
+  Three things did not move: `deny_tables` is still evaluated first and still wins, an empty allow-list still
+  means nothing is writable, and matching is still ordinal and case-sensitive. An entry with no `*` matches
+  exactly as before, so existing configs are unaffected.
+
+  **The cost, stated plainly:** a pattern covers tables that do not exist yet, so `dbo.*` includes whatever is
+  created next month. `rtfq validate` now warns per pattern (`source.writable_wildcard`) rather than letting a
+  gate get wider quietly, and on anything that matters `require_approval` moves from advisable to load-bearing.
 
 - **`scripts/windows/`** — PATH, environment, self-signed certificate and firewall rule, one script each. They
   came out of a real deployment rather than being written to look tidy, so the comments carry the traps: the
@@ -279,7 +296,8 @@ wire protocol, capped and audited. Thin, but nothing in it is a placeholder.
   osx-x64 native payload, so shipping the artifact now would mean withdrawing it later. See
   [ADR 0001](docs/decisions/0001-sql-parser-selection.md). No win-arm64 build either.
 
-[Unreleased]: https://github.com/a7ex-turcan/rtfq/compare/v0.5.0...HEAD
+[Unreleased]: https://github.com/a7ex-turcan/rtfq/compare/v0.6.0...HEAD
+[0.6.0]: https://github.com/a7ex-turcan/rtfq/releases/tag/v0.6.0
 [0.5.0]: https://github.com/a7ex-turcan/rtfq/releases/tag/v0.5.0
 [0.4.0]: https://github.com/a7ex-turcan/rtfq/releases/tag/v0.4.0
 [0.3.0]: https://github.com/a7ex-turcan/rtfq/releases/tag/v0.3.0

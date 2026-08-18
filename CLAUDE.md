@@ -72,7 +72,7 @@ Load-bearing. Do not quietly drift into them.
 
 ### 1. Access level is per-source and default-deny
 
-Each source declares `access: read` (default), `access: write`, or `access: schema`. The levels nest: `schema` implies `write` implies `read`. Each token declares, per source, what it may do. The effective permission is the **intersection**. A source with `access: write` reached by a read-only token is read-only. A write-granted token pointed at a read-only source gets nothing. A source at `access: write` cannot perform schema changes however the token is granted — and `writable_tables` governs DDL targets too, so you may only alter a table you could already write.
+Each source declares `access: read` (default), `access: write`, or `access: schema`. The levels nest: `schema` implies `write` implies `read`. Each token declares, per source, what it may do. The effective permission is the **intersection**. A source with `access: write` reached by a read-only token is read-only. A write-granted token pointed at a read-only source gets nothing. A source at `access: write` cannot perform schema changes however the token is granted — and `writable_tables` governs DDL targets too, so you may only alter a table you could already write. Allow-list entries may use `*` (`dbo.*` covers a schema) as of 0.6.0; `deny_tables` is still evaluated first and still wins, and an empty allow-list still means nothing is writable. See [ADR 0008](docs/decisions/0008-wildcards-in-the-write-allow-list.md) for the cost: a pattern covers tables that do not exist yet.
 
 There is no global "write mode". There is no `--allow-writes` flag. Enabling writes is always a per-source, per-token decision written down in two places.
 

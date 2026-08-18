@@ -226,6 +226,17 @@ public static class ConfigValidator
                     $"source '{source.Name}' has a password written into its dsn - use ${{env:...}} or ${{file:...}}",
                     $"{path}.dsn"));
 
+            // A pattern in the allow-list covers tables that do not exist yet, so
+            // it is worth one line of output. Not an error: it is a legitimate
+            // choice, and one somebody made on purpose. See ADR 0008.
+            foreach (var pattern in source.WritableTables.Where(t => t.Contains('*')))
+            {
+                d.Add(new("source.writable_wildcard", Severity.Warning,
+                    $"source '{source.Name}' allows writes to anything matching '{pattern}', including tables "
+                    + "created later; consider require_approval, and deny_tables for anything that must stay read-only",
+                    $"{path}.writable_tables"));
+            }
+
             // ADR 0002: an adapter that cannot do transactional DDL may not be
             // marked access: schema. What each kind can do is asked of the adapter
             // layer rather than restated here.
