@@ -11,7 +11,17 @@ are called out under *Changed* rather than buried in *Fixed*.
 
 ## [Unreleased]
 
-Nothing yet. Next up is M5: the Docker image, a quickstart timed on a clean machine, and the security posture
+### Changed
+
+- **Server log lines carry a timestamp**, in UTC and on one line:
+  `2026-08-21 14:03:43.874 info: Microsoft.Hosting.Lifetime[14] Now listening on: ...`
+
+  UTC because the audit journal writes ISO-8601 UTC, and correlating a console line with a journal entry is
+  something done while an incident is running rather than at leisure. One line because a stamped two-line record
+  puts the time on one line and the message on the next, which defeats grep. The `rtfq serve` startup summary is
+  unchanged: it is a banner, not a log stream.
+
+Next up is M5: the Docker image, a quickstart timed on a clean machine, and the security posture
 document written for whoever has to approve pointing this at production.
 
 ## [0.7.1] - 2026-08-21

@@ -54,6 +54,20 @@ public sealed class RtfqServer : IAsyncDisposable
         var builder = WebApplication.CreateSlimBuilder();
         builder.Logging.SetMinimumLevel(LogLevel.Information);
 
+        // Timestamped, and in UTC because the audit journal writes ISO-8601 UTC.
+        // Correlating a console line with a journal entry is something somebody
+        // does while an incident is running, and it should not also require
+        // timezone arithmetic.
+        //
+        // Single line for the same reason: a stamped two-line record puts the
+        // time on one line and the message on the next, which defeats grep.
+        builder.Logging.AddSimpleConsole(console =>
+        {
+            console.TimestampFormat = "yyyy-MM-dd HH:mm:ss.fff ";
+            console.UseUtcTimestamp = true;
+            console.SingleLine = true;
+        });
+
         if (!ConfigValidator.TryParseListen(config.Server.Listen, out var endpoint))
             throw new InvalidOperationException($"'{config.Server.Listen}' is not a valid listen address");
 
