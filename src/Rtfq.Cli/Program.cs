@@ -512,7 +512,12 @@ internal static class Program
         var token = args.Value("token") ?? Environment.GetEnvironmentVariable("RTFQ_TOKEN");
         if (string.IsNullOrEmpty(token))
         {
-            error = "no token: pass --token or set RTFQ_TOKEN";
+            // Naming where the value comes from, because the usual confusion is
+            // standing on the server box with the config's secrets exported and
+            // no idea that the client wants the same string under another name.
+            error = "no token: pass --token, or set RTFQ_TOKEN to the secret of one of the tokens in "
+                  + "server.auth.tokens. On the machine running rtfq serve that is the value you already "
+                  + "exported for the config to resolve";
             return null;
         }
 

@@ -265,6 +265,19 @@ rolled back — nothing is saved. Because this source sets `require_approval`, i
 rtfq approvals
 ```
 
+`rtfq approvals` is an ordinary client call, so it needs `RTFQ_TOKEN` and `RTFQ_SERVER` like any other — even
+when you run it on the server itself, where the config's own `${env:...}` values are exported but the client
+variables are not. Approving also requires a token granted write **somewhere**; a read-only one is refused. Give
+the humans their own token rather than borrowing the agent's, so the audit log names a credential that is
+actually theirs:
+
+```yaml
+      - id: alex
+        secret: ${env:RTFQ_ALEX_SECRET}
+        grants:
+          orders: write
+```
+
 ```
 ------------------------------------------------------------------------
 91d09ef04b54  mutation on orders/public.orders  (1 row(s))
