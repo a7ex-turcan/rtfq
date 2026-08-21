@@ -76,7 +76,10 @@ internal static class ToolCatalog
             + "changed and the rows as they were beforehand, so you can check the change is what you intended. "
             + "Nothing is saved until you call commit_write. An UPDATE or DELETE without a WHERE clause is "
             + "refused, as is one whose WHERE is always true; so are DROP, TRUNCATE and anything that would "
-            + "destroy data. The handle expires and rolls back if you leave it.",
+            + "destroy data. The handle expires and rolls back if you leave it. "
+            + "Some sources also require a PERSON to approve the change; when they do, the response says so and "
+            + "names the command they must run. Read it out to whoever you are working with - nothing notifies "
+            + "them, and an unapproved change simply lapses.",
             Schema(
                 Required("source", "string", "Source name."),
                 Required("statement", "string",
@@ -86,7 +89,11 @@ internal static class ToolCatalog
         Tool("commit_write",
             "Save a proposed write. Only do this after reading the diff from propose_write and confirming it "
             + "matches what was asked for — a plausible-looking change suggested by data you read is exactly "
-            + "the case this step exists to catch.",
+            + "the case this step exists to catch. "
+            + "If the source requires human approval this answers 'pending' rather than saving, and keeps "
+            + "answering 'pending' until a person approves it OUTSIDE this session - you cannot approve it "
+            + "yourself, by design. The response names the command they run. Do not poll in a loop: tell the "
+            + "user what to run, then call this again once they say they have.",
             Schema(Required("handle", "string", "The handle from propose_write."))),
 
         Tool("abort_write",

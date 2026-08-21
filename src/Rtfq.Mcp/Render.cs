@@ -177,6 +177,11 @@ public static class Render
 
         sb.Append("handle: ").AppendLine(response.Handle);
         sb.Append("statement fingerprint: ").AppendLine(response.Fingerprint);
+
+        // Beside the handle rather than only inside the hint, so an agent has one
+        // unambiguous token to read out rather than having to parse a sentence.
+        if (response.RequiresApproval && response.ApprovalId is { } approval)
+            sb.Append("approval id: ").AppendLine(approval);
         if (response.Hint is { } hint) sb.AppendLine(hint);
 
         return sb.ToString().TrimEnd();

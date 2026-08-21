@@ -11,7 +11,19 @@ are called out under *Changed* rather than buried in *Fixed*.
 
 ## [Unreleased]
 
-Nothing yet. Next up is M5: the Docker image, a quickstart timed on a clean machine, and the security posture
+### Fixed
+
+- **A proposal awaiting approval now says who has to do what.** It carries the `approval_id`, and the hint names
+  the exact command — `rtfq approvals --approve <id> --as NAME` — and states plainly that **nobody has been
+  notified**. The previous wording, "a human has been asked to approve this exact diff", was wrong twice over:
+  nobody had been asked, and the caller had no id to quote, so a change could only sit until it lapsed. Every
+  `pending` response repeats it, since an agent polling is the one being asked "so what do I do?".
+- **`commit_write`'s description never mentioned approval**, so an agent was told to confirm the diff and commit
+  while the runtime did something else. It now says the call answers `pending` until a person approves it outside
+  the session, that the agent cannot approve it itself, and not to poll in a loop. `propose_write` says the same.
+  Reported from real use; it is the defect class CLAUDE.md added a working agreement about two releases ago.
+
+Next up is M5: the Docker image, a quickstart timed on a clean machine, and the security posture
 document written for whoever has to approve pointing this at production.
 
 ## [0.7.0] - 2026-08-18

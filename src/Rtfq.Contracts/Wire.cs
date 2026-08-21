@@ -179,6 +179,17 @@ public sealed record ProposeWriteResponse
     public required JsonArray DiffSample { get; init; }
 
     public required bool RequiresApproval { get; init; }
+
+    /// <summary>
+    /// Identifies the request a human has to answer. Present only when
+    /// <see cref="RequiresApproval"/> is true.
+    ///
+    /// On the wire because without it the caller cannot say what to approve. An
+    /// agent that can only report "a human has been asked" leaves the person
+    /// reading its output with no way to act, and the change lapses.
+    /// </summary>
+    public string? ApprovalId { get; init; }
+
     public required string ExpiresAt { get; init; }
 
     /// <summary>Hash of the statement this handle came from, so a caller can confirm what it is committing.</summary>
@@ -204,6 +215,12 @@ public sealed record SettleWriteResponse
 
     /// <summary>Who approved it, when a human did.</summary>
     public string? Approver { get; init; }
+
+    /// <summary>The request still waiting on a human, while the outcome is pending.</summary>
+    public string? ApprovalId { get; init; }
+
+    /// <summary>When the wait runs out, while the outcome is pending.</summary>
+    public string? ExpiresAt { get; init; }
 
     public string? Hint { get; init; }
 }

@@ -252,6 +252,71 @@ public sealed class ApprovalPathTests(ApprovalFixture fixture) : IAsyncLifetime
         Assert.Equal("pending", second.Outcome);
     }
 
+    // --- can the person reading this act on it? --------------------------------
+
+    [Fact]
+    public async Task A_proposal_names_the_request_a_human_has_to_answer()
+    {
+        using var client = Writer();
+
+        var proposal = await client.ProposeWriteAsync("shop", "UPDATE orders SET note = 'who' WHERE id = 16");
+
+        Assert.True(proposal.RequiresApproval);
+        Assert.False(string.IsNullOrWhiteSpace(proposal.ApprovalId));
+
+        // The id must be the one actually waiting, not merely non-empty.
+        Assert.Contains((await client.ListApprovalsAsync()).Pending, p => p.Id == proposal.ApprovalId);
+    }
+
+    [Fact]
+    public async Task A_proposal_says_what_a_person_must_run_and_that_nobody_was_told()
+    {
+        using var client = Writer();
+
+        var proposal = await client.ProposeWriteAsync("shop", "UPDATE orders SET note = 'how' WHERE id = 17");
+
+        // "A human has been asked" was the old wording, and it left the person
+        // reading it with nothing to do. Nothing notifies the approver, and
+        // saying so is the difference between a change being approved and a
+        // change silently lapsing.
+        Assert.NotNull(proposal.Hint);
+        Assert.Contains("rtfq approvals --approve", proposal.Hint!);
+        Assert.Contains(proposal.ApprovalId!, proposal.Hint!);
+        Assert.Contains("NOBODY HAS BEEN NOTIFIED", proposal.Hint!);
+    }
+
+    [Fact]
+    public async Task A_pending_commit_repeats_the_command_rather_than_only_saying_pending()
+    {
+        using var client = Writer();
+        var proposal = await client.ProposeWriteAsync("shop", "UPDATE orders SET note = 'wait' WHERE id = 18");
+
+        var pending = await client.CommitWriteAsync(proposal.Handle);
+
+        Assert.Equal("pending", pending.Outcome);
+        Assert.Equal(proposal.ApprovalId, pending.ApprovalId);
+        Assert.NotNull(pending.ExpiresAt);
+
+        // An agent polling this is the one most likely to be asked "so what do I
+        // do?", so the answer travels with every pending response, not just the
+        // first.
+        Assert.Contains("rtfq approvals --approve", pending.Hint!);
+        Assert.Contains(proposal.ApprovalId!, pending.Hint!);
+    }
+
+    [Fact]
+    public async Task A_proposal_needing_no_approval_names_no_approver_and_no_id()
+    {
+        using var client = Writer();
+
+        await client.UnlockAsync("vault", "write", "5m");
+        var proposal = await client.ProposeWriteAsync("vault", "UPDATE stock SET qty = 7 WHERE id = 19");
+
+        Assert.False(proposal.RequiresApproval);
+        Assert.Null(proposal.ApprovalId);
+        Assert.DoesNotContain("approvals --approve", proposal.Hint ?? "");
+    }
+
     // --- the answer ---------------------------------------------------------------
 
     [Fact]

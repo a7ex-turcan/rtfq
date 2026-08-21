@@ -93,6 +93,7 @@ internal static class ApiEndpoints
                 DiffColumns = proposal.DiffColumns,
                 DiffSample = proposal.DiffSample,
                 RequiresApproval = proposal.RequiresApproval,
+                ApprovalId = proposal.ApprovalId,
                 ExpiresAt = proposal.ExpiresAt.ToString("O"),
                 Fingerprint = proposal.Fingerprint,
                 SchemaSummary = proposal.SchemaSummary,
@@ -100,10 +101,19 @@ internal static class ApiEndpoints
                     // Nothing is held while a human decides, so the honest
                     // instruction is to wait and retry - not to abort, which is
                     // what "will be refused" would have an agent do.
-                    ? "nothing is committed, and nothing is locked. A human has been asked to approve this exact "
-                      + $"diff. Call commit_write again to check; it answers 'pending' until somebody decides, and the "
-                      + $"request lapses at {proposal.ExpiresAt:HH:mm:ss}Z. If the rows change in the meantime the "
-                      + "approval no longer describes this change and the commit will be refused."
+                    //
+                    // Naming the command matters more than it looks. Nothing
+                    // notifies the approver: the local provider is a queue, not
+                    // an inbox. If this message does not tell the caller what a
+                    // person has to run, nobody runs anything and the change
+                    // lapses having been silently waiting the whole time.
+                    ? $"nothing is committed, and nothing is locked. This source requires a person to approve the "
+                      + $"change before it is saved, and NOBODY HAS BEEN NOTIFIED - tell whoever is with you to run: "
+                      + $"rtfq approvals --approve {proposal.ApprovalId} --as THEIR-NAME  (or --deny). "
+                      + $"They can see it first with: rtfq approvals. "
+                      + $"Then call commit_write again; it answers 'pending' until they decide, and the request "
+                      + $"lapses at {proposal.ExpiresAt:HH:mm:ss}Z. If the rows change in the meantime the approval "
+                      + "no longer describes this change and the commit is refused."
                     : $"nothing is committed yet. Review the diff, then commit_write or abort_write before {proposal.ExpiresAt:HH:mm:ss}Z, "
                       + "after which the handle expires and rolls back.",
             }, RtfqJson.Default.ProposeWriteResponse, body.Source, body.Statement,
@@ -182,8 +192,13 @@ internal static class ApiEndpoints
                 Outcome = result.State,
                 AffectedRows = result.AffectedRows,
                 Approver = result.Approver,
+                ApprovalId = result.ApprovalId,
+                ExpiresAt = result.ExpiresAt?.ToString("O"),
                 Hint = result.State == "pending"
-                    ? $"{result.Detail}. The handle is still valid; try commit_write again once it has been decided."
+                    ? $"{result.Detail}. Nothing notifies the approver, so if nobody has been told, say so: "
+                      + $"a person needs to run `rtfq approvals --approve {result.ApprovalId} --as THEIR-NAME`"
+                      + (result.ExpiresAt is { } deadline ? $" before {deadline:HH:mm:ss}Z" : "")
+                      + ". The handle stays valid until then; call commit_write again to check."
                     : null,
             }, RtfqJson.Default.SettleWriteResponse,
                classification: "mutation", rowCount: result.AffectedRows).ConfigureAwait(false);

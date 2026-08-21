@@ -25,12 +25,20 @@ public sealed record WriteProposal
     public required List<ColumnInfo> DiffColumns { get; init; }
     public required JsonArray DiffSample { get; init; }
     public required bool RequiresApproval { get; init; }
+
+    /// <summary>The request a human has to answer, when there is one.</summary>
+    public string? ApprovalId { get; init; }
+
     public required DateTimeOffset ExpiresAt { get; init; }
     public required string Fingerprint { get; init; }
     public string? SchemaSummary { get; init; }
 }
 
-public sealed record CommitOutcome(string State, int? AffectedRows, string? Approver, string? Detail);
+/// <param name="ApprovalId">Set while the outcome is pending, so the caller can say what to approve.</param>
+/// <param name="ExpiresAt">When the wait runs out, while the outcome is pending.</param>
+public sealed record CommitOutcome(
+    string State, int? AffectedRows, string? Approver, string? Detail,
+    string? ApprovalId = null, DateTimeOffset? ExpiresAt = null);
 
 /// <summary>
 /// Holds mutations between propose and commit.
@@ -204,6 +212,7 @@ public sealed class MutationBroker : IAsyncDisposable
                 DiffColumns = [.. columns],
                 DiffSample = diff,
                 RequiresApproval = source.RequireApproval,
+                ApprovalId = approvalId,
                 ExpiresAt = DateTimeOffset.UtcNow + ttl,
                 Fingerprint = fingerprint,
                 SchemaSummary = guarded.SchemaSummary,
@@ -254,7 +263,7 @@ public sealed class MutationBroker : IAsyncDisposable
             // Still waiting: give the handle back rather than consuming it.
             _open[handle] = entry;
             return new CommitOutcome("pending", entry.AffectedRows, null,
-                decision.Reason ?? "nobody has decided yet");
+                decision.Reason ?? "nobody has decided yet", entry.ApprovalId, entry.ExpiresAt);
         }
 
         if (decision.State != ApprovalState.Approved)
