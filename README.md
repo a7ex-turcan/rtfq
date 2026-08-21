@@ -313,6 +313,10 @@ unless somebody looks. Two ways to not miss one:
 rtfq approvals --watch          # stays open, prints each request as it arrives, asks [a/d/s]
 ```
 
+Run that wherever you are — it is a client, not a server component, so your own machine is usually the right
+place rather than the box RTFQ runs on. Several people can watch at once: whoever answers first wins, and the
+request drops out of everyone else's queue on the next poll.
+
 ...or, for a team rather than one operator at a desk, hand the question to something that can reach people:
 
 ```yaml
