@@ -285,6 +285,13 @@ requested by token 'agent', expires 2026-08-18T07:17:10Z
 You see the statement and the rows. You never see a summary the agent wrote, because the case this gate exists for
 is an agent that has been persuaded by something it read, and such an agent writes a very reassuring summary.
 
+Nothing notifies you, which is why the proposal tells the agent to read the command out. If you would rather
+not be told, leave a terminal open:
+
+```bash
+rtfq approvals --watch      # prints each request as it arrives, and asks [a/d/s]
+```
+
 Answering it lets the agent's next `commit_write` through — and if the rows moved while you were deciding, the
 commit is refused rather than applied to data you did not approve. `rtfq lock orders` shuts it again.
 

@@ -11,6 +11,13 @@ are called out under *Changed* rather than buried in *Fixed*.
 
 ## [Unreleased]
 
+### Added
+
+- **`rtfq approvals --watch`** stays open and reports requests as they arrive, prompting `[a/d/s]` when there is
+  a person at the keyboard and printing the commands when there is not. This is the answer to "nobody was
+  notified" for a single operator; a webhook provider remains the answer for a team. Skipping is a first-class
+  answer and the default for anything unrecognised, because the safe direction is always "not yet".
+
 ### Fixed
 
 - **A proposal awaiting approval now says who has to do what.** It carries the `approval_id`, and the hint names

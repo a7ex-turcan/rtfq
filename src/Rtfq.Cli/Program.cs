@@ -10,7 +10,7 @@ namespace Rtfq.Cli;
 internal static class Program
 {
     static readonly string[] Flags =
-        ["production", "insecure-skip-verify", "help", "version", "quiet", "write", "schema"];
+        ["production", "insecure-skip-verify", "help", "version", "quiet", "write", "schema", "watch"];
 
     static async Task<int> Main(string[] argv)
     {
@@ -272,6 +272,7 @@ internal static class Program
         var deny = args.Value("deny");
         var approver = args.Value("as") ?? Environment.UserName;
         var reason = args.Value("reason");
+        var watch = args.Has("watch");
         if (Leftovers(args)) return 2;
 
         if (approve is not null || deny is not null)
@@ -283,6 +284,8 @@ internal static class Program
             return 0;
         }
 
+        if (watch) return await WatchApprovalsAsync(client, approver).ConfigureAwait(false);
+
         var pending = await client.ListApprovalsAsync().ConfigureAwait(false);
         if (pending.Pending.Count == 0)
         {
@@ -290,34 +293,162 @@ internal static class Program
             return 0;
         }
 
-        foreach (var item in pending.Pending)
-        {
-            Console.WriteLine(new string('-', 72));
-            Console.WriteLine($"{item.Id}  {item.Kind} on {item.Source}/{item.Target}"
-                + (item.AffectedRows is { } n ? $"  ({n} row(s))" : ""));
-            Console.WriteLine($"requested by token '{item.TokenId}', expires {item.ExpiresAt}");
-            Console.WriteLine();
-            Console.WriteLine("  statement:");
-            var newline = (char)10;
-            foreach (var line in item.Statement.ReplaceLineEndings(newline.ToString()).Split(newline))
-                Console.WriteLine("    " + line);
-
-            if (item.DiffColumns.Count > 0)
-            {
-                Console.WriteLine();
-                Console.WriteLine("  rows as they are now:");
-                Console.WriteLine("    " + string.Join(" | ", item.DiffColumns));
-                foreach (var row in ParseRows(item.DiffRows))
-                    Console.WriteLine("    " + row);
-            }
-
-            Console.WriteLine();
-            Console.WriteLine($"  approve: rtfq approvals --approve {item.Id} --as YOU");
-            Console.WriteLine($"  deny:    rtfq approvals --deny {item.Id} --as YOU");
-        }
+        foreach (var item in pending.Pending) PrintApproval(item);
 
         Console.WriteLine(new string('-', 72));
         return 0;
+    }
+
+    /// <summary>
+    /// Stays open and reports approvals as they arrive.
+    ///
+    /// This exists because the local provider is a queue and not an inbox:
+    /// nothing notifies anybody, so without a terminal left open somewhere, a
+    /// proposal waits until it lapses and the person who could have approved it
+    /// never knew. A webhook provider is the answer for a team; this is the
+    /// answer for one operator at a desk.
+    ///
+    /// Polls rather than long-polls. The server holds no subscription state, an
+    /// approval window is minutes long, and two seconds of latency on a decision
+    /// a human is about to spend thirty seconds reading is not the bottleneck.
+    /// </summary>
+    static async Task<int> WatchApprovalsAsync(RtfqClient client, string approver)
+    {
+        // Interactive only when there is somebody to answer. Piped into a file
+        // or a service manager, prompting would block forever on a read that
+        // never returns.
+        var interactive = !Console.IsInputRedirected;
+
+        using var stopping = new CancellationTokenSource();
+        Console.CancelKeyPress += (_, e) => { e.Cancel = true; stopping.Cancel(); };
+
+        Console.WriteLine(interactive
+            ? $"watching for approvals as {approver}. a=approve, d=deny, s=skip. ctrl-c to stop."
+            : "watching for approvals. ctrl-c to stop.");
+
+        var seen = new HashSet<string>(StringComparer.Ordinal);
+
+        try
+        {
+            while (!stopping.IsCancellationRequested)
+            {
+                PendingApprovalsResponse pending;
+                try
+                {
+                    pending = await client.ListApprovalsAsync(stopping.Token).ConfigureAwait(false);
+                }
+                catch (HttpRequestException ex)
+                {
+                    // A server restart should not end the watch. It also clears
+                    // the queue, so anything held here is gone with it.
+                    Console.Error.WriteLine($"  (cannot reach the server: {ex.Message})");
+                    seen.Clear();
+                    await Task.Delay(TimeSpan.FromSeconds(5), stopping.Token).ConfigureAwait(false);
+                    continue;
+                }
+
+                // Anything decided elsewhere drops out of the queue; forget it so
+                // a later request reusing nothing of it still prints.
+                seen.IntersectWith(pending.Pending.Select(p => p.Id));
+
+                foreach (var item in pending.Pending)
+                {
+                    if (!seen.Add(item.Id)) continue;
+
+                    Console.WriteLine();
+                    PrintApproval(item, showCommands: !interactive);
+
+                    if (!interactive) continue;
+
+                    if (await PromptAsync(client, item, approver, stopping.Token).ConfigureAwait(false))
+                        seen.Remove(item.Id);
+                }
+
+                await Task.Delay(TimeSpan.FromSeconds(2), stopping.Token).ConfigureAwait(false);
+            }
+        }
+        catch (OperationCanceledException)
+        {
+            // ctrl-c. Anything still queued stays queued.
+        }
+
+        Console.WriteLine();
+        Console.WriteLine("stopped watching. anything undecided is still waiting.");
+        return 0;
+    }
+
+    /// <summary>
+    /// Asks, and records the answer. Returns true when the request was decided,
+    /// so the caller stops tracking it.
+    ///
+    /// Skipping is a first-class answer and the default for anything unrecognised:
+    /// somebody who does not understand what they are looking at should be able to
+    /// leave it for a person who does, and the safe direction is always "not yet".
+    /// </summary>
+    static async Task<bool> PromptAsync(
+        RtfqClient client, PendingApprovalInfo item, string approver, CancellationToken cancellationToken)
+    {
+        Console.Write($"  approve {item.Id}? [a/d/s] ");
+        var answer = Console.ReadLine()?.Trim().ToLowerInvariant();
+
+        var approved = answer is "a" or "approve" or "y" or "yes";
+        var denied = answer is "d" or "deny" or "n" or "no";
+
+        if (!approved && !denied)
+        {
+            Console.WriteLine("  skipped; still waiting.");
+            return false;
+        }
+
+        try
+        {
+            var result = await client
+                .DecideApprovalAsync(item.Id, approved, approver, null, cancellationToken)
+                .ConfigureAwait(false);
+
+            Console.WriteLine($"  {result.Id}: {result.Outcome} by {approver}");
+            return true;
+        }
+        catch (RtfqClientException ex)
+        {
+            // Most likely it lapsed or somebody else answered while this one was
+            // being read. Say so rather than looking like the decision landed.
+            Console.WriteLine($"  not recorded [{ex.Code}]: {ex.Message}");
+            return true;
+        }
+    }
+
+    /// <summary>
+    /// The statement and the rows, and nothing else. Per CLAUDE.md principle 3
+    /// the approver never sees a natural-language summary, because the agent that
+    /// wrote one may be the reason this needs approving.
+    /// </summary>
+    static void PrintApproval(PendingApprovalInfo item, bool showCommands = true)
+    {
+        Console.WriteLine(new string('-', 72));
+        Console.WriteLine($"{item.Id}  {item.Kind} on {item.Source}/{item.Target}"
+            + (item.AffectedRows is { } n ? $"  ({n} row(s))" : ""));
+        Console.WriteLine($"requested by token '{item.TokenId}', expires {item.ExpiresAt}");
+        Console.WriteLine();
+        Console.WriteLine("  statement:");
+        var newline = (char)10;
+        foreach (var line in item.Statement.ReplaceLineEndings(newline.ToString()).Split(newline))
+            Console.WriteLine("    " + line);
+
+        if (item.DiffColumns.Count > 0)
+        {
+            Console.WriteLine();
+            Console.WriteLine("  rows as they are now:");
+            Console.WriteLine("    " + string.Join(" | ", item.DiffColumns));
+            foreach (var row in ParseRows(item.DiffRows))
+                Console.WriteLine("    " + row);
+        }
+
+        if (!showCommands) return;
+
+        Console.WriteLine();
+        Console.WriteLine($"  approve: rtfq approvals --approve {item.Id} --as YOU");
+        Console.WriteLine($"  deny:    rtfq approvals --deny {item.Id} --as YOU");
     }
 
     static IEnumerable<string> ParseRows(string diffRows)
@@ -450,6 +581,7 @@ internal static class Program
               rtfq query     --source NAME "SELECT ..." [--max-rows N]
               rtfq explain   --source NAME "SELECT ..."
               rtfq approvals [--approve ID | --deny ID] [--as NAME] [--reason TEXT]
+              rtfq approvals --watch [--as NAME]      stay open; decide as they arrive
               rtfq unlock    SOURCE [--write | --schema] [--ttl 15m]
               rtfq lock      SOURCE
               rtfq mcp
