@@ -285,15 +285,47 @@ requested by token 'agent', expires 2026-08-18T07:17:10Z
 You see the statement and the rows. You never see a summary the agent wrote, because the case this gate exists for
 is an agent that has been persuaded by something it read, and such an agent writes a very reassuring summary.
 
-Nothing notifies you, which is why the proposal tells the agent to read the command out. If you would rather
-not be told, leave a terminal open:
-
-```bash
-rtfq approvals --watch      # prints each request as it arrives, and asks [a/d/s]
-```
-
 Answering it lets the agent's next `commit_write` through — and if the rows moved while you were deciding, the
 commit is refused rather than applied to data you did not approve. `rtfq lock orders` shuts it again.
+
+**The agent cannot approve its own write, and there is no tool that would let it.** That is the entire point: the
+gate exists for the case where the agent has been persuaded by something it read, and an agent that can approve
+itself is not gated at all. The approval has to arrive through a channel the agent does not control. The same
+person can be both — you, at a second terminal — just not the same process.
+
+**Nothing notifies you.** The default provider is a queue, not an inbox, so a proposal waits until it lapses
+unless somebody looks. Two ways to not miss one:
+
+```bash
+rtfq approvals --watch          # stays open, prints each request as it arrives, asks [a/d/s]
+```
+
+...or, for a team rather than one operator at a desk, hand the question to something that can reach people:
+
+```yaml
+approval:
+  mode: webhook
+  endpoint: https://approvals.internal/rtfq
+```
+
+That is how a Slack integration gets built without Slack living in the binary. Anything the endpoint says that is
+not a recognised verdict — a timeout, a 500, malformed JSON, an unreachable host — counts as *not yet decided*,
+never as approval.
+
+### When to turn approval on
+
+On any source where a small, in-bounds, semantically wrong write would matter — which is most of production. The
+four structural gates stop blast radius; they do not stop `UPDATE customers SET tier = 'vip' WHERE id = 42`,
+which is qualified, tiny, allow-listed, and possibly suggested by a poisoned row. Only a person reading the
+statement catches that.
+
+On a dev database it is usually the wrong tool, and asking a human to sign off on every scratch write is how
+people end up removing the gate everywhere. Prefer a deliberate window instead:
+
+```yaml
+    require_approval: false
+    require_unlock: true      # writes stay shut until: rtfq unlock <source> --write --ttl 15m
+```
 
 ## Point an agent at it
 
