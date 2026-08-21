@@ -11,6 +11,13 @@ are called out under *Changed* rather than buried in *Fixed*.
 
 ## [Unreleased]
 
+Nothing yet. Next up is M5: the Docker image, a quickstart timed on a clean machine, and the security posture
+document written for whoever has to approve pointing this at production.
+
+## [0.7.1] - 2026-08-21
+
+Field-reported: an approval-required source left an agent looping on `pending` with no reachable way to approve.
+
 ### Added
 
 - **`rtfq approvals --watch`** stays open and reports requests as they arrive, prompting `[a/d/s]` when there is
@@ -347,7 +354,8 @@ wire protocol, capped and audited. Thin, but nothing in it is a placeholder.
   osx-x64 native payload, so shipping the artifact now would mean withdrawing it later. See
   [ADR 0001](docs/decisions/0001-sql-parser-selection.md). No win-arm64 build either.
 
-[Unreleased]: https://github.com/a7ex-turcan/rtfq/compare/v0.7.0...HEAD
+[Unreleased]: https://github.com/a7ex-turcan/rtfq/compare/v0.7.1...HEAD
+[0.7.1]: https://github.com/a7ex-turcan/rtfq/releases/tag/v0.7.1
 [0.7.0]: https://github.com/a7ex-turcan/rtfq/releases/tag/v0.7.0
 [0.6.0]: https://github.com/a7ex-turcan/rtfq/releases/tag/v0.6.0
 [0.5.0]: https://github.com/a7ex-turcan/rtfq/releases/tag/v0.5.0
