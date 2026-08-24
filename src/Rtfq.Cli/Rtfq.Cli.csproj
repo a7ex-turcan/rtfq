@@ -9,6 +9,15 @@
     <TieredPGO>true</TieredPGO>
   </PropertyGroup>
 
+  <!--
+    Windows is the only target whose executable carries an icon; Linux and macOS
+    binaries have nowhere to put one. Conditioned rather than set unconditionally
+    so a Linux publish does not warn about a resource it cannot use.
+  -->
+  <PropertyGroup Condition="'$(OS)' == 'Windows_NT' or $(RuntimeIdentifier.StartsWith('win'))">
+    <ApplicationIcon>..\..\assets\rtfq.ico</ApplicationIcon>
+  </PropertyGroup>
+
   <ItemGroup>
     <!--
       Required, not defensive. Without these, the published AOT binary throws

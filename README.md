@@ -1,3 +1,5 @@
+<img src="assets/rtfq.png" alt="" width="112" align="right">
+
 # RTFQ — *Remote Tool For Queries*
 
 A single self-hosted binary that gives AI agents and developers **governed, schema-aware, auditable access to

@@ -131,6 +131,11 @@ jobs:
 
           [ "${{ runner.os }}" = "Windows" ] || chmod +x "stage/$name/rtfq"
           cp README.md LICENSE CHANGELOG.md "stage/$name/"
+
+          # The README shows the icon by relative path, so it has to travel with
+          # it or the bundle's copy renders a broken image.
+          mkdir -p "stage/$name/assets"
+          cp assets/rtfq.png "stage/$name/assets/"
           cp examples/rtfq.dev.yaml "stage/$name/examples/"
 
       # The bundle must be runnable from where it lands, native library included.
