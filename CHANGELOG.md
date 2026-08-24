@@ -14,6 +14,34 @@ are called out under *Changed* rather than buried in *Fixed*.
 Nothing yet. Next up is M5: the Docker image, a quickstart timed on a clean machine, and the security posture
 document written for whoever has to approve pointing this at production.
 
+## [0.7.3] - 2026-08-24
+
+### Added
+
+- **An icon.** Embedded in the Windows executable as a six-frame `.ico` (16 through 256), so it shows in
+  Explorer, the taskbar and file properties. Set only for Windows targets: Linux and macOS binaries have nowhere
+  to put one, and setting the property unconditionally makes those publishes warn about a resource they cannot
+  use. The release bundles carry `assets/rtfq.png` because the bundled README references it.
+
+### Changed
+
+- **RTFQ now expands as *Remote Tool For Queries*.** Same four letters, safe on a shared screen, and a truer
+  description besides: reaching data sources on a machine you cannot otherwise get to is the whole pitch.
+- **`no token` now says where the value comes from.** "pass --token or set RTFQ_TOKEN" is accurate and useless
+  in the case people actually hit — standing on the server box, where the config's secrets are exported and the
+  client variable is not, with nothing to suggest the two want the same string.
+
+### Documentation
+
+- The approvals walkthrough gained the three things a field report showed were missing: that **the agent cannot
+  approve its own write** and no tool will ever let it; that **nothing notifies you**, with both answers
+  (`--watch` for one operator, a webhook for a team); and **when to turn approval on at all** — production,
+  where a small in-bounds wrong write is what no structural gate catches, rather than a dev database, where
+  signing off every scratch write is how people end up removing the gate everywhere.
+- Says where to run `rtfq approvals --watch`: it is a client, not a server component, so your own machine is
+  usually the right place. Several people can watch at once — the first answer wins and the request leaves
+  everyone else's queue.
+
 ## [0.7.2] - 2026-08-21
 
 ### Changed
@@ -369,7 +397,8 @@ wire protocol, capped and audited. Thin, but nothing in it is a placeholder.
   osx-x64 native payload, so shipping the artifact now would mean withdrawing it later. See
   [ADR 0001](docs/decisions/0001-sql-parser-selection.md). No win-arm64 build either.
 
-[Unreleased]: https://github.com/a7ex-turcan/rtfq/compare/v0.7.2...HEAD
+[Unreleased]: https://github.com/a7ex-turcan/rtfq/compare/v0.7.3...HEAD
+[0.7.3]: https://github.com/a7ex-turcan/rtfq/releases/tag/v0.7.3
 [0.7.2]: https://github.com/a7ex-turcan/rtfq/releases/tag/v0.7.2
 [0.7.1]: https://github.com/a7ex-turcan/rtfq/releases/tag/v0.7.1
 [0.7.0]: https://github.com/a7ex-turcan/rtfq/releases/tag/v0.7.0
