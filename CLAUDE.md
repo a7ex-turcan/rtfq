@@ -7,7 +7,7 @@
 
 ## What we are building
 
-# RTFQ — *Run The F\*\*\*ing Query*
+# RTFQ — *Running Tool For Queries*
 
 A single self-hosted binary that gives AI agents and developers **governed, schema-aware, auditable access to heterogeneous data sources** on a machine they cannot otherwise reach.
 
