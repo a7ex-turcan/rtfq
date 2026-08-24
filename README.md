@@ -1,6 +1,8 @@
-<img src="assets/rtfq.png" alt="" width="112" align="right">
-
-# RTFQ — *Remote Tool For Queries*
+<div align="center">
+  <img src="assets/rtfq.png" alt="" width="104">
+  <h1>RTFQ</h1>
+  <p><em>Remote Tool For Queries</em></p>
+</div>
 
 A single self-hosted binary that gives AI agents and developers **governed, schema-aware, auditable access to
 heterogeneous data sources** on a machine they cannot otherwise reach.
