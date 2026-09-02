@@ -112,6 +112,14 @@ public sealed class OfflineDescribeTests : IAsyncLifetime
 
     RtfqClient Client() => new(_address, Token, skipCertificateValidation: true);
 
+    async Task CreateTable(string name)
+    {
+        await using var conn = new NpgsqlConnection(_postgres.GetConnectionString());
+        await conn.OpenAsync();
+        await using var cmd = new NpgsqlCommand($"CREATE TABLE {name} (id int primary key, note text)", conn);
+        await cmd.ExecuteNonQueryAsync();
+    }
+
     [Fact]
     public async Task Describe_keeps_answering_after_the_source_goes_down()
     {
@@ -162,6 +170,86 @@ public sealed class OfflineDescribeTests : IAsyncLifetime
         Assert.True(result.Schema.Stale, "a snapshot past its TTL must say so");
         Assert.True(result.Schema.AgeSeconds >= 1);
         Assert.Single(result.Tables);
+    }
+
+    // --- a stale cache must not turn a new table into a phantom missing one ----
+    //
+    // The field report: describe_table for a table created after the cached
+    // snapshot answered "no table X in source" from a 12-day-old cache, so an
+    // agent verifying a migration concluded it had not run. It had.
+
+    [Fact]
+    public async Task A_table_created_after_the_snapshot_is_found_rather_than_reported_missing()
+    {
+        using var client = Client();
+
+        // Warm the cache. It now knows 'orders' and not the table we add next.
+        await client.DescribeTableAsync("orders", "public.orders");
+
+        // A migration adds a table after that snapshot. The TTL is one second, so
+        // by the time we ask, the cache is stale - the reported shape exactly.
+        await CreateTable("rule_condition");
+        await Task.Delay(TimeSpan.FromSeconds(2));
+
+        // describe_table must confirm against the live source, not answer "absent"
+        // from a snapshot that predates the table.
+        var result = await client.DescribeTableAsync("orders", "public.rule_condition");
+
+        Assert.Equal("public.rule_condition", result.Table);
+        Assert.False(result.Schema.Stale, "the confirming re-read makes the served snapshot fresh");
+    }
+
+    [Fact]
+    public async Task A_genuinely_missing_table_is_a_table_code_not_a_source_code()
+    {
+        using var client = Client();
+        await client.DescribeTableAsync("orders", "public.orders");
+        await Task.Delay(TimeSpan.FromSeconds(2));    // stale, so the miss re-reads live
+
+        var ex = await Assert.ThrowsAsync<RtfqClientException>(
+            () => client.DescribeTableAsync("orders", "public.nope"));
+
+        // policy.source_unknown would say the source is gone or forbidden; it is
+        // neither, and an agent must be able to tell those apart.
+        Assert.Equal(ErrorCodes.TableUnknown, ex.Code);
+        Assert.DoesNotContain("source_unknown", ex.Code);
+
+        // Having re-read the live source, the answer is current, not a hedge.
+        Assert.Contains("current", ex.Message);
+    }
+
+    [Fact]
+    public async Task A_missing_table_on_an_unreachable_source_says_it_may_exist_rather_than_asserting_absence()
+    {
+        using var client = Client();
+        await client.DescribeTableAsync("orders", "public.orders");
+
+        await _postgres.StopAsync();
+        await Task.Delay(TimeSpan.FromSeconds(2));    // stale, and now unconfirmable
+
+        var ex = await Assert.ThrowsAsync<RtfqClientException>(
+            () => client.DescribeTableAsync("orders", "public.nope"));
+
+        Assert.Equal(ErrorCodes.TableUnknown, ex.Code);
+
+        // The honest answer when the source could not be checked: it might be there.
+        Assert.Contains("may exist", ex.Message);
+        Assert.Contains("could not be reached", ex.Message);
+    }
+
+    [Fact]
+    public async Task Refresh_makes_a_newly_created_table_visible_at_once()
+    {
+        using var client = Client();
+        await client.DescribeSourceAsync("orders");
+
+        await CreateTable("added_by_migration");
+
+        var refreshed = await client.RefreshAsync("orders");
+        Assert.False(refreshed.Schema.Stale);
+
+        var listed = await client.DescribeSourceAsync("orders", pattern: "added_by_migration");
+        Assert.Contains(listed.Tables, t => t.Name == "public.added_by_migration");
     }
 
     public async Task DisposeAsync()

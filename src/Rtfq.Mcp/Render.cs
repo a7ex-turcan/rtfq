@@ -31,6 +31,16 @@ public static class Render
         return sb.ToString().TrimEnd();
     }
 
+    /// <summary>
+    /// A refresh returns the source envelope with an empty table list (re-reading
+    /// is not a request to dump the catalogue), so this reports the outcome rather
+    /// than the tables: what was re-read, how many tables it now holds, and that
+    /// the cache is fresh again.
+    /// </summary>
+    public static string Refreshed(DescribeSourceResponse response) =>
+        $"{response.Source}: schema re-read, {response.TableCount} table(s), {Freshness(response.Schema)}. "
+        + "describe_source or describe_table now reflects it.";
+
     public static string Source(DescribeSourceResponse response)
     {
         var sb = new StringBuilder();

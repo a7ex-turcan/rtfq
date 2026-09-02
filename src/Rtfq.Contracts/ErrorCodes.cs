@@ -32,6 +32,15 @@ public static class ErrorCodes
     public const string RequestMalformed = "request.malformed";
     public const string StatementEmpty = "request.statement_empty";
 
+    /// <summary>
+    /// The source is reachable and permitted, but the named table is not in it.
+    /// Deliberately distinct from <see cref="SourceUnknown"/>: an agent verifying
+    /// whether a migration ran must be able to tell "this table is absent" from
+    /// "this source does not exist or is not yours", and a single code for both
+    /// turns a confident false negative into a wrong operational conclusion.
+    /// </summary>
+    public const string TableUnknown = "request.table_unknown";
+
     // --- source: the data source's problem, not ours -------------------------
     public const string SourceUnreachable = "source.unreachable";
     public const string SourceTimeout = "source.timeout";

@@ -16,7 +16,7 @@ public sealed class PromptCatalogTests
     static readonly string[] KnownTools =
     [
         "list_sources", "describe_source", "describe_table", "sample",
-        "query", "explain", "propose_write", "commit_write", "abort_write",
+        "query", "explain", "refresh", "propose_write", "commit_write", "abort_write",
     ];
 
     static JsonArray Listed() => PromptCatalog.Describe();
@@ -101,13 +101,11 @@ public sealed class PromptCatalogTests
     {
         // A prompt is fixed at build time and the tool surface is not. Naming a
         // tool that was renamed or removed sends an agent to call something that
-        // will be refused, and the prompt reads perfectly well while doing it.
-        var mentioned = new[]
-        {
-            "list_sources", "describe_source", "describe_table", "sample",
-            "query", "explain", "propose_write", "commit_write", "abort_write",
-            "refresh",
-        };
+        // will be refused, and the prompt reads perfectly well while doing it. A
+        // field report caught exactly this: prompts named `refresh`, which the
+        // runtime did not expose. It is a real tool now, and lives in KnownTools;
+        // `describe` here is the retired name that must never reappear.
+        var mightBeNamed = KnownTools.Concat(["describe"]).ToArray();
 
         var arguments = new JsonObject
         {
@@ -119,11 +117,9 @@ public sealed class PromptCatalogTests
             var name = node!["name"]!.GetValue<string>();
             Assert.True(PromptCatalog.TryGet(name, arguments, out _, out var text));
 
-            foreach (var candidate in mentioned.Where(m => text.Contains($"`{m}`", StringComparison.Ordinal)))
+            foreach (var candidate in mightBeNamed.Where(m => text.Contains($"`{m}`", StringComparison.Ordinal)))
             {
-                Assert.True(
-                    KnownTools.Contains(candidate, StringComparer.Ordinal) || candidate == "refresh",
-                    $"prompt '{name}' names a tool that does not exist: {candidate}");
+                Assert.Contains(candidate, KnownTools);
             }
         }
     }

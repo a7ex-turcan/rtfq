@@ -111,7 +111,10 @@ public sealed class DiscoveryTests(RtfqFixture fixture)
         var ex = await Assert.ThrowsAsync<RtfqClientException>(
             () => client.DescribeTableAsync("orders", "public.nope"));
 
-        Assert.Equal(ErrorCodes.SourceUnknown, ex.Code);
+        // request.table_unknown, not policy.source_unknown: the source is fine,
+        // the table is not, and conflating the two lets an agent verifying a
+        // migration mistake a present source for an absent object.
+        Assert.Equal(ErrorCodes.TableUnknown, ex.Code);
         Assert.Contains("describe_source", ex.Message, StringComparison.Ordinal);
     }
 

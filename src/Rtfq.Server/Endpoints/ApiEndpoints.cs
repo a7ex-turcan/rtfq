@@ -311,7 +311,11 @@ internal static class ApiEndpoints
         CachedSchema cached;
         try
         {
-            cached = await cache.GetAsync(name, ctx.RequestAborted).ConfigureAwait(false);
+            // A miss against a stale snapshot is not an answer: the table may have
+            // been created since it was captured. Confirm against the live source
+            // before saying "absent", when the source is reachable.
+            cached = await cache.GetConfirmingAsync(
+                name, snap => snap.Find(tableName) is not null, ctx.RequestAborted).ConfigureAwait(false);
         }
         catch (AdapterException ex)
         {
@@ -322,9 +326,18 @@ internal static class ApiEndpoints
         var table = cached.Snapshot.Find(tableName);
         if (table is null)
         {
-            await scope.Refuse(StatusCodes.Status404NotFound, ErrorCodes.SourceUnknown,
-                $"no table '{tableName}' in '{name}' as of {Math.Round(cached.Age.TotalSeconds)}s ago; " +
-                "call describe_source to list tables, or refresh if the schema just changed", name)
+            // After GetConfirmingAsync, a still-stale view means the confirming
+            // re-read could not run - the source was unreachable - so absence is
+            // unconfirmed. A fresh view means we checked (or the cache was already
+            // current), so absence is real.
+            var message = cached.Stale
+                ? $"'{tableName}' is not in the cached schema for '{name}' ({Ago(cached.Age)} old), and the source "
+                  + "could not be reached to confirm - so it may exist. Retry when the source is reachable."
+                : $"no table '{tableName}' in '{name}'. The schema is current (read {Ago(cached.Age)} ago), so this "
+                  + "reflects the source as it is now. Names are case-sensitive and schema-qualified "
+                  + "(e.g. dbo.Orders); call describe_source to list what exists.";
+
+            await scope.Refuse(StatusCodes.Status404NotFound, ErrorCodes.TableUnknown, message, name)
                 .ConfigureAwait(false);
             return;
         }
@@ -587,6 +600,13 @@ internal static class ApiEndpoints
     /// <summary>A caller may lower its own ceiling. It can never raise it.</summary>
     static int ClampRows(int? requested, int configured) =>
         requested is { } r && r > 0 ? Math.Min(r, configured) : configured;
+
+    /// <summary>Compact age for a human-readable message: 12d, 3h, 5m, 40s.</summary>
+    static string Ago(TimeSpan age) =>
+        age.TotalDays >= 1 ? $"{age.TotalDays:0.#}d"
+        : age.TotalHours >= 1 ? $"{age.TotalHours:0.#}h"
+        : age.TotalMinutes >= 1 ? $"{age.TotalMinutes:0.#}m"
+        : $"{Math.Max(0, age.TotalSeconds):0}s";
 
     static SchemaFreshness Freshness(CachedSchema cached) => new()
     {

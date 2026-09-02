@@ -11,7 +11,28 @@ are called out under *Changed* rather than buried in *Fixed*.
 
 ## [Unreleased]
 
-Nothing yet. Next up is M5: the Docker image, a quickstart timed on a clean machine, and the security posture
+### Fixed
+
+- **`describe_table` no longer reports an existing table as missing from a stale cache.** Field-reported: a table
+  created after the cached snapshot was captured came back as "no table X in source", so an agent verifying a
+  migration concluded it had not run — it had. A miss against a *stale* snapshot is now confirmed against the
+  live source before it is reported absent; only a stale hit keeps serving-stale-then-refreshing behind the
+  response (ADR 0003), so probing missing names cannot stampede the catalog. This also dissolves the reported
+  divergence where `describe_source` and `describe_table` disagreed on the cache age seconds apart: the
+  confirming re-read leaves both fresh.
+- **A missing table is `request.table_unknown`, not `policy.source_unknown`.** Conflating the two let a present,
+  permitted source read as absent. The message is honest about what it knows: when the source was reachable it
+  says the schema is current; when it was not, it says the table may exist and could not be confirmed, rather
+  than asserting absence.
+
+### Added
+
+- **`refresh` is an MCP tool.** It re-reads a source's schema from the live database, for the moment right after
+  a migration when you need discovery to reflect it at once. It existed as a CLI command and an HTTP endpoint,
+  and both `describe_table`'s error and the `explore_source` prompt already told agents to use it — so the
+  runtime was directing agents to a tool that did not exist, which is the API lying about what it can do.
+
+Next up is M5: the Docker image, a quickstart timed on a clean machine, and the security posture
 document written for whoever has to approve pointing this at production.
 
 ## [0.7.3] - 2026-08-24

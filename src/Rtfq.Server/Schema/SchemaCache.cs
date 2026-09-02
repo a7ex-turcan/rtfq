@@ -34,7 +34,10 @@ public sealed class SchemaCache(
     readonly ConcurrentDictionary<string, byte> _refreshing = new(StringComparer.Ordinal);
     readonly string _directory = Path.Combine(stateDirectory, "schema");
 
-    public async Task<CachedSchema> GetAsync(string source, CancellationToken cancellationToken)
+    public Task<CachedSchema> GetAsync(string source, CancellationToken cancellationToken) =>
+        GetAsync(source, refreshStaleInBackground: true, cancellationToken);
+
+    async Task<CachedSchema> GetAsync(string source, bool refreshStaleInBackground, CancellationToken cancellationToken)
     {
         var snapshot = _memory.GetValueOrDefault(source) ?? LoadFromDisk(source);
 
@@ -46,12 +49,50 @@ public sealed class SchemaCache(
             // Refresh behind the response rather than in front of it. An agent
             // calling describe_table several times while drafting a statement
             // should not wait on a catalog query each time.
-            if (cached.Stale) StartBackgroundRefresh(source);
+            if (cached.Stale && refreshStaleInBackground) StartBackgroundRefresh(source);
             return cached;
         }
 
         // Cold miss: nothing to be stale about, so this one blocks.
         return Describe(await IntrospectAndStoreAsync(source, cancellationToken).ConfigureAwait(false));
+    }
+
+    /// <summary>
+    /// Like <see cref="GetAsync(string, CancellationToken)"/>, but when the served
+    /// snapshot is stale AND does not satisfy <paramref name="satisfied"/>, it
+    /// re-introspects synchronously before returning.
+    ///
+    /// This is the "a table absent from a stale snapshot may simply be younger
+    /// than it" case. Answering "not found" from a 12-day-old snapshot for a table
+    /// created 9 days ago turns a completed migration into a phantom missing one —
+    /// a confident false negative, which is the worst kind. So a stale miss is
+    /// confirmed against the live source, never asserted from cache.
+    ///
+    /// A stale <i>hit</i> keeps the serve-stale-then-refresh-behind behaviour
+    /// (ADR 0003); only a stale miss pays the synchronous cost, and only until the
+    /// TTL makes the re-read snapshot fresh, so probing missing names cannot
+    /// stampede the catalog. If the source is unreachable the stale view is
+    /// returned unchanged — offline discovery still works, and
+    /// <see cref="CachedSchema.Stale"/> stays true so the caller knows it could
+    /// not be confirmed.
+    /// </summary>
+    public async Task<CachedSchema> GetConfirmingAsync(
+        string source, Func<SchemaSnapshot, bool> satisfied, CancellationToken cancellationToken)
+    {
+        // Do not start a background refresh yet: if this turns out to be a stale
+        // miss we refresh synchronously below, and a second crawl would be waste.
+        var cached = await GetAsync(source, refreshStaleInBackground: false, cancellationToken).ConfigureAwait(false);
+
+        if (satisfied(cached.Snapshot) || !cached.Stale)
+        {
+            // A stale hit still gets its background refresh, exactly as GetAsync
+            // would have given it.
+            if (cached.Stale) StartBackgroundRefresh(source);
+            return cached;
+        }
+
+        try { return await RefreshAsync(source, cancellationToken).ConfigureAwait(false); }
+        catch (AdapterException) { return cached; }
     }
 
     /// <summary>Forces a synchronous re-introspection, for an operator who has just run a migration.</summary>

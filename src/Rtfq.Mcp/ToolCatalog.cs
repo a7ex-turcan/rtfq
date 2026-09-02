@@ -43,10 +43,19 @@ internal static class ToolCatalog
         Tool("describe_table",
             "Columns, types, nullability, primary key, indexes and foreign keys for one table. Read this before "
             + "writing a query: it is far cheaper than a failed statement. Also served from cache when the "
-            + "source is unreachable, so you can draft offline.",
+            + "source is unreachable, so you can draft offline. If a table you expect is reported missing while "
+            + "the source is reachable, the schema was re-read to be sure before saying so - trust it; if the "
+            + "source is unreachable the answer says the table may exist and could not be confirmed.",
             Schema(
                 Required("source", "string", "Source name."),
                 Required("table", "string", "Schema-qualified name, e.g. public.orders."))),
+
+        Tool("refresh",
+            "Re-read a source's schema from the live database now, replacing what describe_source and "
+            + "describe_table serve from cache. Use it right after a migration or DDL change when you need "
+            + "discovery to reflect the change immediately rather than on the next cache cycle. Needs the source "
+            + "reachable; it fails if the database is down.",
+            Schema(Required("source", "string", "Source name."))),
 
         Tool("sample",
             "A few rows from a table, to learn the shape of the data rather than to answer a question. "
@@ -116,6 +125,9 @@ internal static class ToolCatalog
         "describe_table" => Render.Table(
             await client.DescribeTableAsync(
                 Text(arguments, "source"), Text(arguments, "table"), cancellationToken).ConfigureAwait(false)),
+
+        "refresh" => Render.Refreshed(
+            await client.RefreshAsync(Text(arguments, "source"), cancellationToken).ConfigureAwait(false)),
 
         "sample" => Render.Rows(
             await client.SampleAsync(
