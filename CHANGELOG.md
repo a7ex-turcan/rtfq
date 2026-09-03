@@ -11,6 +11,14 @@ are called out under *Changed* rather than buried in *Fixed*.
 
 ## [Unreleased]
 
+Nothing yet. Next up is M5: the Docker image, a quickstart timed on a clean machine, and the security posture
+document written for whoever has to approve pointing this at production.
+
+## [0.7.4] - 2026-09-03
+
+Field-reported: `describe_table` served a stale cache and reported an existing table as missing, so an agent
+verifying a migration concluded it had not run.
+
 ### Fixed
 
 - **`describe_table` no longer reports an existing table as missing from a stale cache.** Field-reported: a table
@@ -418,7 +426,8 @@ wire protocol, capped and audited. Thin, but nothing in it is a placeholder.
   osx-x64 native payload, so shipping the artifact now would mean withdrawing it later. See
   [ADR 0001](docs/decisions/0001-sql-parser-selection.md). No win-arm64 build either.
 
-[Unreleased]: https://github.com/a7ex-turcan/rtfq/compare/v0.7.3...HEAD
+[Unreleased]: https://github.com/a7ex-turcan/rtfq/compare/v0.7.4...HEAD
+[0.7.4]: https://github.com/a7ex-turcan/rtfq/releases/tag/v0.7.4
 [0.7.3]: https://github.com/a7ex-turcan/rtfq/releases/tag/v0.7.3
 [0.7.2]: https://github.com/a7ex-turcan/rtfq/releases/tag/v0.7.2
 [0.7.1]: https://github.com/a7ex-turcan/rtfq/releases/tag/v0.7.1
