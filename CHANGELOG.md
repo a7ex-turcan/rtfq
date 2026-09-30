@@ -11,6 +11,13 @@ are called out under *Changed* rather than buried in *Fixed*.
 
 ## [Unreleased]
 
+Nothing yet. Next up is M5: the Docker image, a quickstart timed on a clean machine, and the security posture
+document written for whoever has to approve pointing this at production.
+
+## [0.7.5] - 2026-09-30
+
+Field-reported: PostgreSQL sources with `SSL Mode=Require` could not connect at all.
+
 ### Fixed
 
 - **PostgreSQL sources can connect over TLS.** Field-reported against three AWS Aurora sources: any DSN with
@@ -27,9 +34,6 @@ Enabling the capability forces nothing: `SSL Mode=Disable` still connects in pla
 verification is untouched - `VerifyFull` against an untrusted certificate is still refused at the handshake.
 Every case is covered by a new suite against a real TLS-enabled PostgreSQL, and was run against the published
 NativeAOT binary.
-
-Next up is M5: the Docker image, a quickstart timed on a clean machine, and the security posture
-document written for whoever has to approve pointing this at production.
 
 ## [0.7.4] - 2026-09-03
 
@@ -443,7 +447,8 @@ wire protocol, capped and audited. Thin, but nothing in it is a placeholder.
   osx-x64 native payload, so shipping the artifact now would mean withdrawing it later. See
   [ADR 0001](docs/decisions/0001-sql-parser-selection.md). No win-arm64 build either.
 
-[Unreleased]: https://github.com/a7ex-turcan/rtfq/compare/v0.7.4...HEAD
+[Unreleased]: https://github.com/a7ex-turcan/rtfq/compare/v0.7.5...HEAD
+[0.7.5]: https://github.com/a7ex-turcan/rtfq/releases/tag/v0.7.5
 [0.7.4]: https://github.com/a7ex-turcan/rtfq/releases/tag/v0.7.4
 [0.7.3]: https://github.com/a7ex-turcan/rtfq/releases/tag/v0.7.3
 [0.7.2]: https://github.com/a7ex-turcan/rtfq/releases/tag/v0.7.2
