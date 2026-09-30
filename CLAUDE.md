@@ -294,7 +294,7 @@ Everything above the adapter layer is source-agnostic. If the core needs to chan
 - **Schema cache serves stale-flagged data when the source is down, never silently.** Offline discovery is a feature, hidden staleness is a bug.
 - **Truncation, timeouts, and caps are contract, not implementation detail.** Changing a default is an API change.
 - **Prefer deleting a feature to adding a config knob.**
-- Tests: every adapter runs against a real containerized instance, not a mock. The read-only-enforcement and mutation-guard suites are adversarial and per-dialect — those are the tests that matter most.
+- Tests: every adapter runs against a real containerized instance, not a mock — **and, for any engine whose managed offerings run TLS by default, against a TLS-enabled one too.** PostgreSQL TLS was absent from M0 to 0.7.4 because every fixture ran with SSL off; the defaults of a test container are not the defaults of RDS. The read-only-enforcement and mutation-guard suites are adversarial and per-dialect — those are the tests that matter most.
 
 ## Open questions
 

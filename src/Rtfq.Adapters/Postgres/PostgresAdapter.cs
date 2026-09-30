@@ -58,10 +58,22 @@ public sealed class PostgresAdapter : ISourceAdapter
 
         csb.CommandTimeout = (int)Math.Ceiling(statementTimeout.TotalSeconds) + 1;
 
-        // The slim builder opts out of array support by default, and introspection
-        // reads array_agg results and passes schema lists as parameters.
+        // The slim builder opts out of features the standard one includes, and each
+        // one we need has to be opted back in by name:
+        //
+        // - Arrays: introspection reads array_agg results and passes schema lists
+        //   as parameters.
+        // - Transport security: without it, ANY connection that negotiates TLS
+        //   fails client-side with "Transport security hasn't been enabled" -
+        //   which is every managed PostgreSQL (RDS, Aurora, Azure, Cloud SQL) with
+        //   SSL Mode=Require. This only adds the capability; the DSN's SSL Mode
+        //   still decides whether TLS is used, and certificate verification is
+        //   untouched - Trust Server Certificate / VerifyFull behave as written.
+        //   It shipped missing from M0 to 0.7.4 because no test ran against a
+        //   TLS-enabled server; PostgresTlsTests now does.
         _dataSource = new NpgsqlSlimDataSourceBuilder(csb.ConnectionString)
             .EnableArrays()
+            .EnableTransportSecurity()
             .Build();
     }
 

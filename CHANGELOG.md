@@ -11,7 +11,24 @@ are called out under *Changed* rather than buried in *Fixed*.
 
 ## [Unreleased]
 
-Nothing yet. Next up is M5: the Docker image, a quickstart timed on a clean machine, and the security posture
+### Fixed
+
+- **PostgreSQL sources can connect over TLS.** Field-reported against three AWS Aurora sources: any DSN with
+  `SSL Mode=Require` failed client-side, before reaching the server, with *"Transport security hasn't been
+  enabled"*. The adapter builds its data source with Npgsql's slim builder for NativeAOT, which leaves TLS out
+  unless it is opted into, and it never was. Not a regression: it was missing in every release from 0.1.0
+  through 0.7.4, and went unnoticed because no test ever ran against a TLS-enabled server.
+- **A DSN with no `SSL Mode` no longer silently downgrades to plaintext.** Found while fixing the above, and
+  the more serious of the two. Npgsql's default is `Prefer`, and a client that cannot speak TLS "prefers" its
+  way straight to an unencrypted connection - so against a server offering TLS, every query and result crossed
+  the network in cleartext, with no error and no warning. It now negotiates TLS whenever the server offers it.
+
+Enabling the capability forces nothing: `SSL Mode=Disable` still connects in plaintext, and certificate
+verification is untouched - `VerifyFull` against an untrusted certificate is still refused at the handshake.
+Every case is covered by a new suite against a real TLS-enabled PostgreSQL, and was run against the published
+NativeAOT binary.
+
+Next up is M5: the Docker image, a quickstart timed on a clean machine, and the security posture
 document written for whoever has to approve pointing this at production.
 
 ## [0.7.4] - 2026-09-03
